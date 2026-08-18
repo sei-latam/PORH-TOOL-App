@@ -1,5 +1,6 @@
 # ERA_CARDER_TOOL
 
+```
 mi-proyecto-shiny/
 ├── .gitignore               # Archivos que Git debe ignorar (básico para datos pesados)
 ├── README.md                # Presentación del proyecto y cómo ejecutarlo
@@ -8,7 +9,7 @@ mi-proyecto-shiny/
 ├── ui.R                     # Definición de la interfaz de usuario (estructura de pestañas)
 ├── server.R                 # Lógica del servidor principal (orquestador de módulos)
 │
-├── R/                       # ¡La carpeta de funciones! (Shiny la lee automáticamente)
+├── R/                       # Carpeta de funciones
 │   ├── utils_helpers.R      # Funciones auxiliares de R que no son reactivas
 │   ├── mod_mapa.R           # Módulo Shiny para el mapa de Leaflet
 │   ├── mod_perfiles.R       # Módulo Shiny para los gráficos de perfiles (reutilizable)
@@ -28,3 +29,4 @@ mi-proyecto-shiny/
     │   └── favicon.ico      # Icono de la pestaña del navegador
     └── js/
         └── custom.js        # Scripts de JS complementarios (opcional)
+```
