@@ -1,0 +1,397 @@
+
+  # Mapa ICA IDEAM --------------------
+  
+  lapply(1:2, function(h) {
+    output[[paste0("mapICA",h)]] = renderLeaflet({
+      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
+      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
+      req(input$FechaICA)
+      req(input$radioICA)
+      Fechaf=input$FechaICA
+      Radiof=input$radioICA
+      
+      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
+      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
+      
+      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
+      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) 
+      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
+      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
+      Cat=CategoriasICA
+      for (i in 1:nrow(ICA_datosSub)){
+        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
+          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
+        }
+        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
+          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
+        }
+      }
+      
+      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs[h],"LATITUD" ,"LONGITUD",ICAsc[h],"CORRIENTE")]
+      
+      colnames(ICA_datosSub)
+      shapesContexto=shapescontexto$ShapesContexto
+      NshapesContexto=shapescontexto$NombresShapesContexto
+      CshapesContexto=shapescontexto$ColorShapesContexto
+      EshapesContexto=shapescontexto$Etiqueta
+      
+      map = leaflet()%>%
+        addMapPane("principalpuntos", zIndex = 450) %>%
+        addMapPane("principallineas", zIndex = 440) %>%
+        addMapPane("principalpoligonos", zIndex = 400) %>%
+        addMapPane("puntos", zIndex = 420) %>%
+        addMapPane("lineas", zIndex = 410) %>%
+        addMapPane("poligonos", zIndex = 400)
+      
+      CategoriasSub=CategoriasICA[CategoriasICA$Variable=="ICA IDEAM",]
+      levels=CategoriasSub$Categoria
+      ICA_datosSub[,ICAsc[h]] = factor(ICA_datosSub[,ICAsc[h]],levels)
+      factpal = colorFactor(CategoriasSub$CodigoColor[order(levels)], levels)
+      
+      labsEstaciones = lapply(seq(nrow(ICA_datosSub)), function(j) {
+        paste0( 'Estacion : ', ICA_datosSub$Estacion[j], '<p></p>',
+                ICAs[h], " : ", round(ICA_datosSub[j,ICAs[h]],3), '<p></p>',
+                ICAsc[h], " : ", ICA_datosSub[j,ICAsc[h]], '<p></p>',
+                "Corriente", " : ", ICA_datosSub[j,"CORRIENTE"], '<p></p>'
+        )
+      })
+      labsC5 = lapply(seq(nrow(RedHidrica)), function(i) {
+        paste0('Nombre Corriente : ', RedHidrica[["NombreDren"]][i]
+        )
+      })
+      labsC8 = lapply(seq(nrow(Municipios)), function(i) {
+        paste0('Municipio : ', Municipios[["MPIO_CNMBR"]][i]
+        )
+      })
+      
+      Nleyenda=ICAs[h]
+      
+      map <- map %>%
+        addCircles(data= ICA_datosSub,lng = ICA_datosSub$LONGITUD, lat = ICA_datosSub$LATITUD,
+                   radius = Radiof, weight = 1, group ="Estaciones ICA", fillOpacity = 1,
+                   color = factpal(ICA_datosSub[,ICAsc[h]]) , options = pathOptions(pane = "principalpuntos"),
+                   highlight = highlightOptions(weight = 1,
+                                                color = "yellow",
+                                                fillOpacity = 1,
+                                                bringToFront = TRUE),
+                   label = lapply(labsEstaciones, htmltools::HTML)) %>%
+        addLegend("topright", pal = factpal, values = ICA_datosSub[,ICAsc[h]],
+                  title = Nleyenda,
+                  opacity = 1)
+      
+      map = map %>%
+        addTiles(group = "OpenStreetMap") %>%
+        addProviderTiles(providers$Esri.NatGeoWorldMap, group = "Esri.NatGeoWorld") %>%
+        addProviderTiles(providers$Esri.WorldPhysical, group = "Esri.WorldPhysical") %>%
+        addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery")  %>%
+        addPolylines(data = RedHidrica, color = "blue", weight = 1.5, opacity = 0.5,
+                     group = "Red Hidrica",
+                     options = pathOptions(pane = "principallineas"),
+                     highlight = highlightOptions(weight = 2.2,
+                                                  color = "white",
+                                                  fillOpacity = 0.7,
+                                                  bringToFront = T),
+                     label = lapply(labsC5, htmltools::HTML)) %>%
+        addPolygons(data = Municipios, stroke = T,
+                    group = "Municipios",
+                    smoothFactor = 0.2, fillOpacity = 0.4,
+                    color = "black", fillColor = "#e5abf5",opacity = 0.9, weight = 1, dashArray = "3",
+                    options = pathOptions(pane = "principalpoligonos"),
+                    highlight = highlightOptions(weight = 1.5,
+                                                 color = "white",
+                                                 fillOpacity = 0.2,
+                                                 bringToFront = F),
+                    label = lapply(labsC8, htmltools::HTML)) %>%
+        
+        # --- BARRA DE HERRAMIENTAS DE DIBUJO Y MEDICIÓN (TOPLEFT) ---
+        leaflet.extras::addDrawToolbar(
+          position = "topleft",
+          targetGroup = "DibujosUsuario",
+          polylineOptions = leaflet.extras::drawPolylineOptions(showLength = TRUE, metric = TRUE),
+          polygonOptions = leaflet.extras::drawPolygonOptions(showArea = TRUE, metric = TRUE),
+          circleOptions = leaflet.extras::drawCircleOptions(showRadius = TRUE, metric = TRUE),
+          rectangleOptions = leaflet.extras::drawRectangleOptions(showArea = TRUE, metric = TRUE),
+          markerOptions = leaflet.extras::drawMarkerOptions(),
+          circleMarkerOptions = FALSE,
+          editOptions = leaflet.extras::editToolbarOptions(selectedPathOptions = leaflet.extras::selectedPathOptions())
+        ) %>%
+        
+        addLayersControl(
+          position = "topright",
+          baseGroups = c("OpenStreetMap", "Esri.NatGeoWorld","Esri.WorldPhysical","Esri.WorldImagery"),
+          overlayGroups = c("Estaciones ICA", "Red Hidrica", "Municipios", "DibujosUsuario"),
+          options = layersControlOptions(collapsed = TRUE)
+        )  %>%
+        hideGroup("Municipios") %>%
+        addMiniMap(
+          toggleDisplay = TRUE, position = "topright") %>%
+        
+        # --- BÚSQUEDA (BOTTOMLEFT) Y GPS PROFESIONAL (BOTTOMRIGHT) ---
+        htmlwidgets::onRender("
+        function(el, x) {
+          var map = this;
+          
+          // -------------------------------------------------------------
+          // 1. CONTROL DE BÚSQUEDA (BOTTOMLEFT)
+          // -------------------------------------------------------------
+          var searchControl = L.control({position: 'bottomleft'});
+          
+          searchControl.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+            div.style.backgroundColor = 'white';
+            div.style.padding = '3px';
+            div.style.display = 'flex';
+            div.style.alignItems = 'center';
+
+            var inputId = 'customSearchInput_' + el.id;
+            var listId = 'customSearchList_' + el.id;
+
+            div.innerHTML = '<input type=\"text\" id=\"' + inputId + '\" list=\"' + listId + '\" placeholder=\"Buscar lugar en Colombia...\" style=\"width: 170px; padding: 2px 5px; border: 1px solid #ccc; outline: none; font-size: 12px; height: 24px;\">' +
+                            '<datalist id=\"' + listId + '\"></datalist>' +
+                            '<button id=\"customSearchBtn_' + el.id + '\" title=\"Buscar\" style=\"background: #fff; border: 1px solid #ccc; border-left: none; cursor: pointer; padding: 2px 6px; height: 24px;\">🔍</button>';
+
+            L.DomEvent.disableClickPropagation(div);
+            return div;
+          };
+
+          searchControl.addTo(map);
+
+          // -------------------------------------------------------------
+          // 2. CONTROL INDEPENDIENTE GPS CON SVG NATIVO (BOTTOMRIGHT)
+          // -------------------------------------------------------------
+          var gpsControl = L.control({position: 'bottomright'});
+
+          var svgTarget = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#444\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"/><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"/><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"12\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"#444\"/></svg>';
+          var svgSpinner = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"2.5\" stroke-linecap=\"round\" style=\"animation: spin 1s linear infinite;\"><style>@keyframes spin { 100% { transform: rotate(360deg); } }</style><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>';
+
+          gpsControl.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+            div.style.backgroundColor = 'white';
+            div.style.padding = '0px';
+
+            var gpsBtnId = 'gpsLocationBtn_' + el.id;
+            div.innerHTML = '<button id=\"' + gpsBtnId + '\" title=\"Obtener mi ubicación\" style=\"background: #fff; border: none; cursor: pointer; height: 30px; width: 30px; display: flex; align-items: center; justify-content: center; outline: none;\">' + svgTarget + '</button>';
+
+            L.DomEvent.disableClickPropagation(div);
+            return div;
+          };
+
+          gpsControl.addTo(map);
+
+          // -------------------------------------------------------------
+          // 3. LÓGICA DE EVENTOS
+          // -------------------------------------------------------------
+          setTimeout(function() {
+            var input = document.getElementById('customSearchInput_' + el.id);
+            var dataList = document.getElementById('customSearchList_' + el.id);
+            var btn = document.getElementById('customSearchBtn_' + el.id);
+            var gpsBtn = document.getElementById('gpsLocationBtn_' + el.id);
+            var searchResults = {};
+
+            var gpsMarker = null;
+            var gpsCircle = null;
+
+            // Lógica de Búsqueda
+            if(input && dataList) {
+              input.addEventListener('input', function() {
+                var query = input.value;
+                if (query.length < 3) return;
+
+                var url = 'https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(query);
+
+                fetch(url)
+                  .then(function(res) { return res.json(); })
+                  .then(function(data) {
+                    dataList.innerHTML = '';
+                    searchResults = {};
+                    
+                    data.forEach(function(item) {
+                      var option = document.createElement('option');
+                      option.value = item.display_name;
+                      dataList.appendChild(option);
+                      searchResults[item.display_name] = { lat: item.lat, lon: item.lon };
+                    });
+                  });
+              });
+
+              function executeFlyTo() {
+                var selectedVal = input.value;
+                if (searchResults[selectedVal]) {
+                  var coords = searchResults[selectedVal];
+                  map.flyTo([parseFloat(coords.lat), parseFloat(coords.lon)], 14);
+                } else if (selectedVal) {
+                  fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(selectedVal))
+                    .then(function(res) { return res.json(); })
+                    .then(function(data) {
+                      if (data && data.length > 0) {
+                        map.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 14);
+                      } else {
+                        alert('Lugar no encontrado en Colombia.');
+                      }
+                    });
+                }
+              }
+
+              btn.addEventListener('click', executeFlyTo);
+              input.addEventListener('change', executeFlyTo);
+            }
+
+            // Lógica del Botón GPS
+            if(gpsBtn) {
+              gpsBtn.addEventListener('click', function() {
+                if (!navigator.geolocation) {
+                  alert('Geolocalización no soportada en este navegador.');
+                  return;
+                }
+
+                gpsBtn.innerHTML = svgSpinner;
+
+                navigator.geolocation.getCurrentPosition(
+                  function(pos) {
+                    gpsBtn.innerHTML = svgTarget;
+                    var lat = pos.coords.latitude;
+                    var lng = pos.coords.longitude;
+                    var acc = pos.coords.accuracy;
+
+                    if (gpsMarker) map.removeLayer(gpsMarker);
+                    if (gpsCircle) map.removeLayer(gpsCircle);
+
+                    map.flyTo([lat, lng], 15);
+
+                    gpsCircle = L.circle([lat, lng], {
+                      radius: acc,
+                      color: '#1d4ed8',
+                      fillColor: '#3b82f6',
+                      fillOpacity: 0.15,
+                      weight: 1.5
+                    }).addTo(map);
+
+                    gpsMarker = L.marker([lat, lng])
+                      .addTo(map)
+                      .bindPopup('<b>Ubicación del usuario</b><br>Margen de precisión: ±' + Math.round(acc) + ' m')
+                      .openPopup();
+                  },
+                  function(err) {
+                    gpsBtn.innerHTML = svgTarget;
+                    var msjs = {
+                      1: 'El acceso a la ubicación fue denegado. Si estás ejecutando la app en RStudio, abre la aplicación en el navegador externo (Open in Browser).',
+                      2: 'Ubicación no disponible.',
+                      3: 'Tiempo de espera agotado al consultar el GPS.'
+                    };
+                    alert(msjs[err.code] || 'Error al obtener la ubicación.');
+                  },
+                  { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+              });
+            }
+          }, 500);
+        }
+      ")
+      
+      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
+      fitBounds(map, coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+    })
+  })
+  
+  proxy1ica = leafletProxy("mapICA1")
+  proxy2ica = leafletProxy("mapICA2")
+  
+  observeEvent(input$EstacionICA,{
+    req(input$FechaICA)
+    
+    if(input$EstacionICA!="Todas"){
+      Estacionf=input$EstacionICA
+      selected_polygon = ICA_datos1[ICA_datos1$Estacion==Estacionf,]
+      x=unique(selected_polygon$LONGITUD)
+      y=unique(selected_polygon$LATITUD)
+      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
+      proxy1ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
+      proxy1ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon1ICA")
+      
+      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
+      proxy2ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
+      proxy2ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon2ICA")
+    } else {
+      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
+      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
+      
+      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
+      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
+      req(input$FechaICA)
+      Fechaf=input$FechaICA
+      
+      ####
+      ICA_datosSub=ICA_datos1
+      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
+      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
+      
+      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
+      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) #, CUENCA=ICA_datosSub$CUENCA, ALTITUD=ICA_datosSub$ALTITUD
+      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
+      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
+      Cat=CategoriasICA
+      for (i in 1:nrow(ICA_datosSub)){
+        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
+          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
+        }
+        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
+          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
+        }
+      }
+      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
+      proxy1ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+      proxy2ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+    }
+  })
+  
+  proxy1ica = leafletProxy("mapICA1")
+  proxy2ica = leafletProxy("mapICA2")
+  
+  observeEvent(input$EstacionICA,{
+    req(input$FechaICA)
+    
+    if(input$EstacionICA!="Todas"){
+      Estacionf=input$EstacionICA
+      selected_polygon = ICA_datos1[ICA_datos1$Estacion==Estacionf,]
+      x=unique(selected_polygon$LONGITUD)
+      y=unique(selected_polygon$LATITUD)
+      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
+      proxy1ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
+      proxy1ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon1ICA")
+      
+      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
+      proxy2ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
+      proxy2ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon2ICA")
+    } else {
+      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
+      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
+      
+      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
+      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
+      req(input$FechaICA)
+      Fechaf=input$FechaICA
+      
+      ####
+      ICA_datosSub=ICA_datos1
+      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
+      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
+      
+      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
+      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) #, CUENCA=ICA_datosSub$CUENCA, ALTITUD=ICA_datosSub$ALTITUD
+      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
+      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
+      Cat=CategoriasICA
+      for (i in 1:nrow(ICA_datosSub)){
+        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
+          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
+        }
+        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
+          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
+        }
+      }
+      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
+      proxy1ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+      proxy2ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+    }
+  })
+  
