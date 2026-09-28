@@ -23,7 +23,11 @@ if (!require("readxl")) install.packages("readxl"); library("readxl")
 if (!require("writexl")) install.packages("writexl"); library("writexl")
 if (!require("leaflet.extras")) install.packages("leaflet.extras"); library("leaflet.extras")
 if (!require("shinythemes")) install.packages("shinythemes"); library("shinythemes")
+if (!require("visNetwork")) install.packages("visNetwork"); library("visNetwork")
 
+library(visNetwork)
+library(readxl)
+library(tidyr)
 library(dplyr)
 library(shiny)
 library(bslib)
@@ -33,6 +37,7 @@ library(leaflet.extras)
 library(tidyverse)
 library(DT)
 library(sf)
+
 
 options(shiny.reactlog = TRUE) 
 options(show.error.messages = TRUE)
@@ -155,6 +160,90 @@ PerfilesMetas <- PerfilesMetas[!is.na(PerfilesMetas$Abscisakm), ]
 VALORES <- list()
 rm(Corriente, Perfilesshp1)
 gc(verbose = FALSE)
+
+
+# ==============================================================================
+# IMPORTACIÓN Y PREPARACIÓN DE DATOS: ESCENARIOS DE EVALUACIÓN
+# ==============================================================================
+
+# 1. Importación y transformación espacial del Shapefile de Escenarios
+tramos_escenarios_shp <- read_sf(dsn = "TRAMOS_PORH.shp")
+tramos_escenarios     <- st_zm(tramos_escenarios_shp, drop = TRUE, what = "ZM")
+tramos_escenarios     <- st_transform(tramos_escenarios, crs = 4326)
+
+# FORZAR COLUMNA DE DISTANCIA Y MESES A NÚMERO
+if ("distancia" %in% names(tramos_escenarios)) {
+  tramos_escenarios$distancia <- as.numeric(as.character(tramos_escenarios$distancia))
+}
+
+meses_cols <- c("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+for (m in meses_cols) {
+  if (m %in% names(tramos_escenarios)) {
+    tramos_escenarios[[m]] <- as.numeric(as.character(tramos_escenarios[[m]]))
+  }
+}
+
+# 2. Creación de la tabla en formato largo para el gráfico de Plotly (Escenarios)
+tramos_escenarios_long <- tramos_escenarios %>%
+  st_drop_geometry() %>%
+  mutate(
+    # Conservar y asegurar el tipo de distancia en el data frame
+    distancia = as.numeric(distancia),
+    # Etiqueta única combinando Río, Tramo y Descripción
+    etiqueta_tramo = paste0(RIO, " | ", TRAMO, " (", Descripci, ")")
+  ) %>%
+  pivot_longer(
+    cols = all_of(meses_cols),
+    names_to = "mes_id",
+    values_to = "escenario_valor"  # Renombrado de 'meta_valor' a 'escenario_valor'
+  ) %>%
+  mutate(
+    mes_nombre = factor(
+      mes_id,
+      levels = meses_cols,
+      labels = c("Ene", "Feb", "Mar", "Abr", "May", "Jun", 
+                 "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+    ),
+    mes_num = as.numeric(mes_nombre)
+  )
+
+
+# 1. Carga del Shapefile de Tramos (Otún y Dosquebradas)
+tramos_meta_shp <- read_sf("Tramos_D2k_Otun.shp")
+tramos_meta_shp <- st_zm(tramos_meta_shp, drop = TRUE, what = "ZM")
+tramos_meta_shp <- st_transform(tramos_meta_shp, crs = 4326)
+
+# Asegurar tipo numérico para la distancia
+if ("distancia" %in% names(tramos_meta_shp)) {
+  tramos_meta_shp$distancia <- as.numeric(as.character(tramos_meta_shp$distancia))
+}
+
+# 2. Carga del Excel de Parámetros y Metas de Calidad
+perfiles_metas_excel <- read_excel("ERA_Perfiles_Metas_Nuevas_Final.xlsx")
+
+# Limpieza de nombres de columna (elimina columnas vacías como 'Unnamed: 22' si existen)
+perfiles_metas_excel <- perfiles_metas_excel %>% 
+  select(-contains("Unnamed"))
+
+# Identificación automática de columnas de parámetros de calidad
+cols_metadatos <- c("Identificador", "Meta", "Rio", "Tramo", "Uso")
+parametros_calidad <- setdiff(names(perfiles_metas_excel), cols_metadatos)
+
+# Convertir todas las columnas de parámetros a tipo numérico
+perfiles_metas_excel <- perfiles_metas_excel %>%
+  mutate(across(all_of(parametros_calidad), ~ as.numeric(as.character(.))))
+
+# 3. Creación de tabla larga (Pivot) para gráfico y análisis dinámico
+tramos_meta_calidad_long <- perfiles_metas_excel %>%
+  pivot_longer(
+    cols = all_of(parametros_calidad),
+    names_to = "Parametro",
+    values_to = "meta_valor"
+  ) %>%
+  mutate(
+    etiqueta_tramo = paste0(Rio, " | ", Tramo)
+  )
+
 
 
 # --- INTERFAZ DE USUARIO (UI) ---
@@ -286,7 +375,7 @@ ui <- page_sidebar(
   title = div(
     class = "d-flex justify-content-between align-items-center w-100 pe-1",
     style = "font-family: 'Georgia', serif; font-weight: bold; font-size: 20px;",
-    span("Era App"),
+    span("PORH-Tool"),
     
     div(
       class = "d-flex align-items-center gap-3 fs-6 font-sans-serif",
@@ -368,8 +457,11 @@ ui <- page_sidebar(
     width = 350,
     div(
       class = "d-flex flex-column gap-1 mb-3",
-      actionButton("btn_nav_estaciones", label = tagList(icon("gauge"), " Información de las Estaciones"), class = "nav-btn-link text-start"),
-      actionButton("btn_nav_perfiles", label = tagList(icon("chart-line"), " Perfiles de Calidad"), class = "nav-btn-link text-start")
+      actionButton("btn_nav_estaciones", label = tagList(icon("gauge"), " Información de las estaciones"), class = "nav-btn-link text-start"),
+      actionButton("btn_nav_perfiles", label = tagList(icon("chart-line"), " Perfiles de calidad"), class = "nav-btn-link text-start"),
+      actionButton("btn_nav_metas", label = tagList(icon("bullseye"), " Metas de calidad de agua"), class = "nav-btn-link text-start"),
+      actionButton("btn_nav_topologia", label = tagList(icon("diagram-project"), " Modelo topología"), class = "nav-btn-link text-start"),
+      actionButton("btn_nav_escenarios", label = tagList(icon("sliders"), " Escenarios de evaluación"), class = "nav-btn-link text-start")
     ),
     hr(),
     div(
@@ -457,7 +549,7 @@ ui <- page_sidebar(
       nav_panel_hidden(
         value = "sec_estaciones",
         div(
-          h3("Dashboard"),
+          h3("Información de las estaciones de calidad"),
           hr(),
           br(),
           
@@ -590,7 +682,7 @@ ui <- page_sidebar(
       nav_panel_hidden(
         value = "sec_perfiles",
         div(
-          h3("Perfiles de Calidad"),
+          h3("Perfiles de calidad"),
           hr(),
           br(),
           
@@ -691,7 +783,396 @@ ui <- page_sidebar(
             )
           )
         )
+      ),
+     
+      # ==============================================================================
+      # SECCIÓN: METAS DE CALIDAD DE AGUA (UI)
+      # ==============================================================================
+      nav_panel_hidden(
+        value = "sec_metas",
+        div(
+          h3("Metas de Calidad de Agua"),
+          hr(),
+          br(),
+          
+          # CSS GLOBAL PARA CONTROLAR LA ALTURA Y SCROLL DE LOS SELECTINPUT
+          tags$head(
+            tags$style(HTML("
+        .selectize-dropdown-content {
+          max-height: 200px !important;
+          overflow-y: auto !important;
+        }
+        .selectize-input {
+          font-size: 11px !important;
+          min-height: 31px !important;
+          padding: 3px 6px !important;
+          max-height: 75px !important;
+          overflow-y: auto !important;
+        }
+        .selectize-control.multi .selectize-input > div {
+          padding: 1px 4px !important;
+          margin: 2px 2px !important;
+          font-size: 10.5px !important;
+          border-radius: 3px !important;
+        }
+        .selectize-dropdown .option {
+          font-size: 11px !important;
+          padding: 4px 8px !important;
+        }
+      "))
+          ),
+          
+          # 1. GEOVISOR DE METAS DE CALIDAD
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("bullseye"), " Mapa de Metas de Calidad de Agua"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_mapa_metas_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_mapa_metas_body",
+              class = "collapse show",
+              
+              # BARRA SUPERIOR DE SELECCIÓN DE HORIZONTE DE META
+              div(
+                class = "bg-light border-bottom py-2 px-3 d-flex align-items-center justify-content-between",
+                div(class = "d-flex align-items-center gap-2")
+              ),
+              
+              card_body(
+                padding = 0,
+                leafletOutput("mapa_metas_agua", height = "600px")
+              ),
+              
+              # BOTONERA Y CONTROLES UNIFICADOS EN UN SOLO DIV
+              card_footer(
+                class = "bg-light pt-2 pb-5 px-3",
+                div(
+                  class = "d-flex align-items-center justify-content-between flex-wrap gap-2",
+                  
+                  # TODO EN UN MISMO CONTENEDOR FLEX
+                  div(
+                    class = "d-flex align-items-center gap-2 w-100 justify-content-between",
+                    
+                    # 1. Indicador del parámetro activo
+                    div(
+                      class = "d-flex align-items-center gap-2",
+                      span(class = "text-black", "Parámetro:"),
+                      span(
+                        id = "lbl_parametro_activo_metas",
+                        class = "text-black fs-8 px-2 py-2",
+                        textOutput("txt_parametro_activo_metas", inline = FALSE)
+                      )
+                    ),
+                    
+                    # 2. Botones de reproducción
+                    div(
+                      class = "btn-group shadow-sm me-2",
+                      role = "group",
+                      `aria-label` = "Controles de animación de parámetros metas",
+                      actionButton(
+                        inputId = "btn_prev_param_metas",
+                        label = NULL,
+                        icon = icon("step-backward"),
+                        class = "btn btn-outline-secondary btn-sm",
+                        title = "Parámetro anterior"
+                      ),
+                      actionButton(
+                        inputId = "btn_play_param_metas",
+                        label = " Play",
+                        icon = icon("play"),
+                        class = "btn btn-success btn-sm fw-bold",
+                        title = "Iniciar/Pausar recorrido automático de parámetros"
+                      ),
+                      actionButton(
+                        inputId = "btn_next_param_metas",
+                        label = NULL,
+                        icon = icon("step-forward"),
+                        class = "btn btn-outline-secondary btn-sm",
+                        title = "Parámetro siguiente"
+                      )
+                    ),
+                    
+                    # 3. Selector manual de parámetro
+                    selectInput(
+                      inputId = "sel_parametro_manual_metas",
+                      label = NULL,
+                      choices = NULL,
+                      width = "280px"
+                    ),
+                    
+                    # 4. Selector de horizonte de meta
+                    selectInput(
+                      inputId = "sel_meta_horizonte_metas",
+                      label = NULL,
+                      choices = c(
+                        "Corto Plazo (5 años)" = "Corto Plazo (5 años)",
+                        "Mediano Plazo (10 años)" = "Mediano Plazo (10 años)",
+                        "Largo Plazo (20 años)" = "Largo Plazo (20 años)"
+                      ),
+                      selected = "Corto Plazo (5 años)",
+                      width = "220px"
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          
+          # 2. GRÁFICO LONGITUDINAL POR DISTANCIA (METAS)
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("chart-line"), " Perfil Longitudinal de Calidad de Agua (Distancia vs Meta)"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_grafico_metas_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_grafico_metas_body",
+              class = "collapse show",
+              card_body(
+                # BARRA DE CONTROLES DEL GRÁFICO
+                div(
+                  class = "row g-2 align-items-center mb-2",
+                  div(
+                    class = "col-auto",
+                    actionButton("btn_seleccionar_todos_metas", " Activar todas", icon = icon("check-double"), class = "btn-sm btn-outline-primary")
+                  ),
+                  div(
+                    class = "col-auto",
+                    actionButton("btn_deseleccionar_todos_metas", " Desactivar todas", icon = icon("ban"), class = "btn-sm btn-outline-secondary")
+                  ),
+                  div(
+                    class = "col",
+                    selectizeInput(
+                      inputId = "sel_tramos_grafico_metas",
+                      label = NULL,
+                      choices = NULL,
+                      multiple = TRUE,
+                      options = list(
+                        placeholder = "Seleccione o busque tramos...",
+                        plugins = list("remove_button"),
+                        maxOptions = 100
+                      ),
+                      width = "100%"
+                    )
+                  )
+                ),
+                # GRÁFICO LONGITUDINAL DE PLOTLY
+                plotlyOutput("grafico_metas_tramos", height = "420px")
+              )
+            )
+          )
+        )
+      ),
+      
+      # ==============================================================================
+      # SECCIÓN: MODELO DE TOPOLOGÍA HÍDRICA (UI - VACÍA)
+      # ==============================================================================
+      nav_panel_hidden(
+        value = "sec_topologia",
+        div(
+          h3("Modelo de Topología Hídrica"),
+          hr(),
+          br()
+        )
+      ),
+      
+      nav_panel_hidden(
+        value = "sec_escenarios",
+        div(
+          h3("Escenarios de evaluación"),
+          hr(),
+          br(),
+          
+          # --- CARD 1: GEOVISOR DE ESCENARIOS ---
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("map-location-dot"), " Geovisor de escenarios de evaluación"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_mapa_escenarios_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_mapa_escenarios_body",
+              class = "collapse show",
+              card_body(
+                padding = 0,
+                leafletOutput("mapa_escenarios_agua", height = "600px")
+              ),
+              
+              # --- CONTROLES DE ANIMACIÓN MENSUAL DE ESCENARIOS ---
+              card_footer(
+                class = "bg-light py-2 px-3",
+                div(
+                  class = "d-flex align-items-center justify-content-between flex-wrap gap-2",
+                  
+                  # 1. Indicador del mes activo
+                  div(
+                    class = "d-flex align-items-center gap-2",
+                    span(class = "fw-bold text-secondary", "Mes en visualización:"),
+                    span(
+                      id = "lbl_mes_activo_escenarios",
+                      class = "badge bg-primary fs-6 px-3 py-2",
+                      textOutput("txt_mes_activo_escenarios", inline = TRUE)
+                    )
+                  ),
+                  
+                  # 2. Controles de Reproducción
+                  div(
+                    class = "btn-group shadow-sm",
+                    role = "group",
+                    `aria-label` = "Controles de animación mensual escenarios",
+                    
+                    actionButton(
+                      inputId = "btn_prev_mes_escenarios",
+                      label = NULL,
+                      icon = icon("step-backward"),
+                      class = "btn btn-outline-secondary btn-sm",
+                      title = "Mes anterior"
+                    ),
+                    actionButton(
+                      inputId = "btn_play_mes_escenarios",
+                      label = " Play",
+                      icon = icon("play"),
+                      class = "btn btn-success btn-sm fw-bold",
+                      title = "Iniciar/Pausar animación automática"
+                    ),
+                    actionButton(
+                      inputId = "btn_next_mes_escenarios",
+                      label = NULL,
+                      icon = icon("step-forward"),
+                      class = "btn btn-outline-secondary btn-sm",
+                      title = "Mes siguiente"
+                    )
+                  ),
+                  
+                  # 3. Selector manual directo de mes
+                  div(
+                    class = "d-flex align-items-center gap-2",
+                    selectInput(
+                      inputId = "sel_mes_manual_escenarios",
+                      label = NULL,
+                      choices = c(
+                        "Enero" = "ene", "Febrero" = "feb", "Marzo" = "mar", 
+                        "Abril" = "abr", "Mayo" = "may", "Junio" = "jun", 
+                        "Julio" = "jul", "Agosto" = "ago", "Septiembre" = "sep", 
+                        "Octubre" = "oct", "Noviembre" = "nov", "Diciembre" = "dic"
+                      ),
+                      selected = "ene",
+                      width = "140px"
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          
+          # --- CARD 2: GRÁFICO DE VARIACIÓN ESPACIO-TEMPORAL ---
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("chart-line"), " Variación espacial-temporal de escenarios de evaluación"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_grafico_escenarios_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_grafico_escenarios_body",
+              class = "collapse show",
+              card_body(
+                # ESTILOS COMPACTOS SELECTIZE
+                tags$head(
+                  tags$style(HTML("
+              .selectize-input {
+                font-size: 11px !important;
+                min-height: 31px !important;
+                padding: 3px 6px !important;
+                max-height: 75px !important;
+                overflow-y: auto !important;
+              }
+              .selectize-control.multi .selectize-input > div {
+                padding: 1px 4px !important;
+                margin: 2px 2px !important;
+                font-size: 10.5px !important;
+                border-radius: 3px !important;
+              }
+              .selectize-dropdown .option {
+                font-size: 11px !important;
+                padding: 3px 8px !important;
+              }
+            "))
+                ),
+                
+                # BARRA DE CONTROLES
+                div(
+                  class = "row g-2 align-items-center mb-2",
+                  div(
+                    class = "col-auto",
+                    actionButton("btn_seleccionar_todos_escenarios", " Activar todas", icon = icon("check-double"), class = "btn-sm btn-outline-primary")
+                  ),
+                  div(
+                    class = "col-auto",
+                    actionButton("btn_deseleccionar_todos_escenarios", " Desactivar todas", icon = icon("ban"), class = "btn-sm btn-outline-secondary")
+                  ),
+                  div(
+                    class = "col",
+                    selectizeInput(
+                      inputId = "sel_tramos_grafico_escenarios",
+                      label = NULL,
+                      choices = NULL,
+                      multiple = TRUE,
+                      options = list(
+                        placeholder = "Seleccione o busque tramos...",
+                        plugins = list("remove_button"),
+                        maxOptions = 100
+                      ),
+                      width = "100%"
+                    )
+                  )
+                ),
+                
+                # GRÁFICO PLOTLY
+                plotlyOutput("grafico_escenarios_tramos", height = "420px")
+              )
+            )
+          )
+        )
       )
+      
+      
     )
   )
 )
@@ -735,6 +1216,20 @@ server <- function(input, output, session) {
   observeEvent(input$btn_nav_perfiles, {
     nav_select("secciones_main", selected = "sec_perfiles")
   })
+  
+  
+  observeEvent(input$btn_nav_metas, {
+    nav_select("secciones_main", selected = "sec_metas")
+  })
+  
+  observeEvent(input$btn_nav_topologia, {
+    nav_select("secciones_main", selected = "sec_topologia")
+  })
+  
+  observeEvent(input$btn_nav_escenarios, {
+    nav_select("secciones_main", selected = "sec_escenarios")
+  })
+  
   
   observeEvent(input$btn_nav_intro, {
     mostrar_seccion_fullscreen(
@@ -1669,7 +2164,6 @@ server <- function(input, output, session) {
   })
   
   
-  # --- TABLA PROMEDIOS ICA ---
   output$tableICAmapa <- renderDT(server = FALSE, {
     ICAs  <- c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
     ICAsc <- c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
@@ -2039,23 +2533,17 @@ server <- function(input, output, session) {
   })
   
   
-  
-  
   datos_perfil_filtrados <- reactive({
     req(input$RioPerfil, input$parametro_perfil)
   
     df <- Perfiles_Datos[Perfiles_Datos$NOMBRE == input$RioPerfil, ]
     req(nrow(df) > 0)
     
-    # Validar que el parámetro seleccionado exista en las columnas
     req(input$parametro_perfil %in% colnames(df))
     
-    # Ordenar por abscisa longitudinal para el trazado continuo de la línea
     df <- df[order(df$Abscisakm), ]
     return(df)
   })
-  
-  
   
   
   output$grafico_perfil_render <- renderPlotly({
@@ -2224,9 +2712,6 @@ server <- function(input, output, session) {
   })
   
   
-  
-  
-  
   output$Perfil0 <- renderPlotly({
     req(input$RioPerfil)
     
@@ -2311,6 +2796,906 @@ server <- function(input, output, session) {
              title = paste0("Corriente: ", Estacionf, "<br> Perfil ICA-5 [IDEAM]"),
              font = list(size = 11))
   })
-}
+
+  
+  
+  # ==============================================================================
+  # SECCIÓN: METAS DE CALIDAD DE AGUA (SERVER COMPLETO Y ACTUALIZADO)
+  # ==============================================================================
+  
+  # 1. RENDERIZADO INICIAL DEL GEOVISOR DE METAS
+  output$mapa_metas_agua <- renderLeaflet({
+    
+    leaflet() %>%
+      addMapPane("principallineas_metas", zIndex = 440) %>%
+      addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery") %>%
+      addTiles(group = "OpenStreetMap") %>%
+      addProviderTiles(providers$Esri.NatGeoWorld, group = "Esri.NatGeoWorld") %>%
+      addProviderTiles(providers$Esri.WorldPhysical, group = "Esri.WorldPhysical") %>%
+      setView(lng = -75.7, lat = 4.8, zoom = 11) %>%
+      leaflet.extras::addDrawToolbar(
+        position = "topleft",
+        targetGroup = "Herramientas de dibujo",
+        polylineOptions = leaflet.extras::drawPolylineOptions(showLength = TRUE, metric = TRUE),
+        polygonOptions = leaflet.extras::drawPolygonOptions(showArea = TRUE, metric = TRUE),
+        circleOptions = leaflet.extras::drawCircleOptions(showRadius = TRUE, metric = TRUE),
+        rectangleOptions = leaflet.extras::drawRectangleOptions(showArea = TRUE, metric = TRUE),
+        markerOptions = leaflet.extras::drawMarkerOptions(),
+        circleMarkerOptions = FALSE,
+        editOptions = leaflet.extras::editToolbarOptions(selectedPathOptions = leaflet.extras::selectedPathOptions())
+      ) %>%
+      addLayersControl(
+        position = "topright",
+        baseGroups = c("Esri.WorldImagery", "OpenStreetMap", "Esri.NatGeoWorld", "Esri.WorldPhysical"),
+        overlayGroups = c("Tramos Metas Calidad", "Herramientas de dibujo"),
+        options = layersControlOptions(collapsed = TRUE)
+      ) %>%
+      addMiniMap(toggleDisplay = TRUE, position = "topright") %>%
+      htmlwidgets::onRender("
+    function(el, x) {
+      var map = this;
+      var searchControl = L.control({position: 'bottomleft'});
+      searchControl.onAdd = function (map) {
+        var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+        div.style.backgroundColor = 'white'; div.style.padding = '3px'; div.style.display = 'flex'; div.style.alignItems = 'center';
+        div.innerHTML = '<input type=\"text\" class=\"custom-search-input-metas\" placeholder=\"Buscar lugar en Colombia...\" style=\"width: 170px; padding: 2px 5px; border: 1px solid #ccc; outline: none; font-size: 12px; height: 24px;\">' +
+                        '<button class=\"custom-search-btn-metas\" title=\"Buscar\" style=\"background: #fff; border: 1px solid #ccc; border-left: none; cursor: pointer; padding: 2px 6px; height: 24px;\">🔍</button>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+      };
+      searchControl.addTo(map);
+
+      var gpsControl = L.control({position: 'bottomright'});
+      var svgTarget = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#444\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"/><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"/><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"22\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"#444\"/></svg>';
+      var svgSpinner = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"2.5\" stroke-linecap=\"round\" style=\"animation: spin 1s linear infinite;\"><style>@keyframes spin { 100% { transform: rotate(360deg); } }</style><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>';
+
+      gpsControl.onAdd = function (map) {
+        var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+        div.style.backgroundColor = 'white'; div.style.padding = '0px';
+        div.innerHTML = '<button class=\"gps-location-btn-metas\" title=\"Obtener mi ubicación\" style=\"background: #fff; border: none; cursor: pointer; height: 30px; width: 30px; display: flex; align-items: center; justify-content: center; outline: none;\">' + svgTarget + '</button>';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+      };
+      gpsControl.addTo(map);
+
+      var gpsMarker = null, gpsCircle = null;
+      var gpsBtn = el.querySelector('.gps-location-btn-metas');
+      if (gpsBtn) {
+        L.DomEvent.on(gpsBtn, 'click', function() {
+          if (!navigator.geolocation) { alert('Geolocalización no soportada'); return; }
+          gpsBtn.innerHTML = svgSpinner;
+          navigator.geolocation.getCurrentPosition(
+            function(pos) {
+              gpsBtn.innerHTML = svgTarget;
+              var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
+              if (gpsMarker) map.removeLayer(gpsMarker);
+              if (gpsCircle) map.removeLayer(gpsCircle);
+              map.flyTo([lat, lng], 15);
+              gpsCircle = L.circle([lat, lng], { radius: acc, color: '#1d4ed8', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1.5 }).addTo(map);
+              gpsMarker = L.marker([lat, lng]).addTo(map).bindPopup('<b>Ubicación del usuario</b><br>Precisión: ±' + Math.round(acc) + ' m').openPopup();
+            },
+            function(err) { gpsBtn.innerHTML = svgTarget; alert('Error al obtener la ubicación.'); },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          );
+        });
+      }
+
+      var searchInput = el.querySelector('.custom-search-input-metas');
+      var searchBtn = el.querySelector('.custom-search-btn-metas');
+      function executeSearch() {
+        var query = searchInput.value;
+        if (!query) return;
+        fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(query))
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            if (data && data.length > 0) { map.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 14); }
+            else { alert('Lugar no encontrado en Colombia.'); }
+          });
+      }
+      if (searchBtn && searchInput) {
+        L.DomEvent.on(searchBtn, 'click', executeSearch);
+        L.DomEvent.on(searchInput, 'keypress', function(e) { if (e.keyCode === 13) executeSearch(); });
+      }
+    }
+    ")
+  })
+  
+  # 2. INICIALIZACIÓN Y CONTROLES DE ANIMACIÓN POR PARÁMETROS
+  observe({
+    req(exists("parametros_calidad"), length(parametros_calidad) > 0)
+    updateSelectInput(session, "sel_parametro_manual_metas", choices = parametros_calidad, selected = parametros_calidad[1])
+  })
+  
+  anim_state_metas <- reactiveValues(
+    running = FALSE,
+    index = 1
+  )
+  
+  auto_invalidate_metas <- reactiveTimer(1500)
+  
+  observe({
+    if (anim_state_metas$running) {
+      auto_invalidate_metas()
+      isolate({
+        n_params <- length(parametros_calidad)
+        if (n_params > 0) {
+          anim_state_metas$index <- ifelse(anim_state_metas$index >= n_params, 1, anim_state_metas$index + 1)
+          updateSelectInput(session, "sel_parametro_manual_metas", selected = parametros_calidad[anim_state_metas$index])
+        }
+      })
+    }
+  })
+  
+  observeEvent(input$btn_play_param_metas, {
+    anim_state_metas$running <- !anim_state_metas$running
+    if (anim_state_metas$running) {
+      updateActionButton(session, "btn_play_param_metas", label = " Pause", icon = icon("pause"))
+    } else {
+      updateActionButton(session, "btn_play_param_metas", label = " Play", icon = icon("play"))
+    }
+  })
+  
+  observeEvent(input$btn_next_param_metas, {
+    anim_state_metas$running <- FALSE
+    updateActionButton(session, "btn_play_param_metas", label = " Play", icon = icon("play"))
+    n_params <- length(parametros_calidad)
+    if (n_params > 0) {
+      anim_state_metas$index <- ifelse(anim_state_metas$index >= n_params, 1, anim_state_metas$index + 1)
+      updateSelectInput(session, "sel_parametro_manual_metas", selected = parametros_calidad[anim_state_metas$index])
+    }
+  })
+  
+  observeEvent(input$btn_prev_param_metas, {
+    anim_state_metas$running <- FALSE
+    updateActionButton(session, "btn_play_param_metas", label = " Play", icon = icon("play"))
+    n_params <- length(parametros_calidad)
+    if (n_params > 0) {
+      anim_state_metas$index <- ifelse(anim_state_metas$index <= 1, n_params, anim_state_metas$index - 1)
+      updateSelectInput(session, "sel_parametro_manual_metas", selected = parametros_calidad[anim_state_metas$index])
+    }
+  })
+  
+  observeEvent(input$sel_parametro_manual_metas, {
+    match_idx <- match(input$sel_parametro_manual_metas, parametros_calidad)
+    if (!is.na(match_idx)) {
+      anim_state_metas$index <- match_idx
+    }
+  }, ignoreInit = TRUE)
+  
+  output$txt_parametro_activo_metas <- renderText({
+    req(input$sel_parametro_manual_metas)
+    input$sel_parametro_manual_metas
+  })
+  
+  # 3. ACTUALIZACIÓN DINÁMICA DE TRAMOS EN EL MAPA (LEAFLET PROXY METAS)
+  observe({
+    req(exists("tramos_meta_shp"), exists("perfiles_metas_excel"), 
+        input$sel_parametro_manual_metas, input$sel_meta_horizonte_metas)
+    
+    param_activo <- input$sel_parametro_manual_metas
+    meta_activa  <- input$sel_meta_horizonte_metas
+    
+    # Estandarización sencilla (mayúsculas y sin espacios al inicio/final)
+    df_excel_sub <- perfiles_metas_excel %>%
+      filter(toupper(trimws(Meta)) == toupper(trimws(meta_activa))) %>%
+      mutate(
+        Rio_clean = toupper(trimws(Rio)),
+        Tramo_clean = toupper(trimws(Tramo))
+      )
+    
+    tramos_shp_clean <- tramos_meta_shp %>%
+      mutate(
+        RIO_clean = toupper(trimws(RIO)),
+        TRAMO_clean = toupper(trimws(TRAMO))
+      )
+    
+    # Cruce directo de atributos
+    datos_mapa <- tramos_shp_clean %>%
+      inner_join(df_excel_sub, by = c("RIO_clean" = "Rio_clean", "TRAMO_clean" = "Tramo_clean"))
+    
+    req(nrow(datos_mapa) > 0, param_activo %in% names(datos_mapa))
+    
+    val_param <- suppressWarnings(as.numeric(as.character(datos_mapa[[param_activo]])))
+    
+    # Paleta de colores dinámica
+    vals_validos <- val_param[!is.na(val_param)]
+    min_g <- if (length(vals_validos) > 0) min(vals_validos) else 0
+    max_g <- if (length(vals_validos) > 0) max(vals_validos) else 10
+    if (min_g == max_g) max_g <- min_g + 1
+    
+    pal <- colorNumeric(
+      palette = rev("RdYlGn"), 
+      domain = c(min_g, max_g), 
+      na.color = "#808080"
+    )
+    
+    colores_vect <- pal(val_param)
+    colores_vect[is.na(colores_vect)] <- "#808080"
+    
+    labels_vect <- paste0("Tramo: ", datos_mapa$TRAMO, " | Río: ", datos_mapa$RIO, 
+                          " | ", param_activo, ": ", ifelse(is.na(val_param), "Sin Dato", val_param))
+    
+    popups_vect <- paste0(
+      "<div style='font-family: sans-serif;'>",
+      "<h5 style='margin-bottom:5px; color:#2c3e50;'><b>", datos_mapa$TRAMO, "</b></h5>",
+      "<b>Río: </b>", datos_mapa$RIO, "<br>",
+      "<b>Uso: </b>", datos_mapa$USO, "<br>",
+      "<b>Escenario: </b>", datos_mapa$Meta, "<br>",
+      "<b>Descripción: </b>", datos_mapa$Descripci, "<br>",
+      "<hr style='margin: 5px 0;'>",
+      "<b style='color:#0d6efd;'>Meta ", param_activo, ": </b>",
+      "<span style='font-size:14px;' class='badge bg-primary'>", ifelse(is.na(val_param), "Sin Dato", val_param), "</span>",
+      "</div>"
+    )
+    
+    # Encuadre automático del mapa a todos los tramos (Otún + Quebrada Dos Quebradas)
+    bbox <- sf::st_bbox(datos_mapa)
+    
+    leafletProxy("mapa_metas_agua") %>%
+      clearGroup("Tramos Metas Calidad") %>%
+      removeControl(layerId = "leyenda_metas") %>%
+      addPolylines(
+        data = datos_mapa,
+        group = "Tramos Metas Calidad",
+        weight = 5,
+        color = colores_vect,
+        opacity = 0.9,
+        options = pathOptions(pane = "principallineas_metas"),
+        label = labels_vect,
+        popup = popups_vect
+      ) %>%
+      fitBounds(
+        lng1 = as.numeric(bbox["xmin"]), lat1 = as.numeric(bbox["ymin"]),
+        lng2 = as.numeric(bbox["xmax"]), lat2 = as.numeric(bbox["ymax"])
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        pal = pal,
+        values = c(min_g, max_g),
+        title = paste0(param_activo, "<br><small>", meta_activa, "</small>"),
+        layerId = "leyenda_metas",
+        opacity = 0.8
+      )
+  })
+  
+  # 4. DATASET REACTIVO PARA PERFIL LONGITUDINAL
+  dataset_metas_distancia <- reactive({
+    req(exists("tramos_meta_shp"), exists("tramos_meta_calidad_long"))
+    
+    df_distancias <- tramos_meta_shp %>%
+      st_drop_geometry() %>%
+      mutate(
+        RIO_clean = toupper(trimws(RIO)),
+        TRAMO_clean = toupper(trimws(TRAMO))
+      ) %>%
+      select(RIO_clean, TRAMO_clean, distancia) %>%
+      distinct()
+    
+    tramos_meta_calidad_long %>%
+      mutate(
+        RIO_clean = toupper(trimws(Rio)),
+        TRAMO_clean = toupper(trimws(Tramo))
+      ) %>%
+      inner_join(df_distancias, by = c("RIO_clean", "TRAMO_clean"))
+  })
+  
+  # Actualización dinámica del selector de tramos en el gráfico
+  observe({
+    df <- dataset_metas_distancia()
+    req(df, "etiqueta_tramo" %in% names(df))
+    
+    tramos_unicos <- sort(unique(df$etiqueta_tramo))
+    updateSelectizeInput(
+      session,
+      "sel_tramos_grafico_metas",
+      choices = tramos_unicos,
+      selected = tramos_unicos,
+      server = TRUE
+    )
+  })
+  
+  observeEvent(input$btn_seleccionar_todos_metas, {
+    df <- dataset_metas_distancia()
+    req(df, "etiqueta_tramo" %in% names(df))
+    tramos_unicos <- sort(unique(df$etiqueta_tramo))
+    updateSelectizeInput(session, "sel_tramos_grafico_metas", selected = tramos_unicos)
+  })
+  
+  observeEvent(input$btn_deseleccionar_todos_metas, {
+    updateSelectizeInput(session, "sel_tramos_grafico_metas", selected = character(0))
+  })
+  
+  # Renderizado del gráfico perfil longitudinal (Distancia vs Meta Valor)
+  output$grafico_metas_tramos <- renderPlotly({
+    df <- dataset_metas_distancia()
+    
+    req(input$sel_parametro_manual_metas, input$sel_meta_horizonte_metas)
+    
+    param_actual <- input$sel_parametro_manual_metas
+    meta_actual  <- input$sel_meta_horizonte_metas
+    
+    df_sub <- df %>%
+      filter(toupper(trimws(Parametro)) == toupper(trimws(param_actual)),
+             toupper(trimws(Meta)) == toupper(trimws(meta_actual)))
+    
+    if (!is.null(input$sel_tramos_grafico_metas) && length(input$sel_tramos_grafico_metas) > 0) {
+      df_sub <- df_sub[df_sub$etiqueta_tramo %in% input$sel_tramos_grafico_metas, ]
+    }
+    
+    if (nrow(df_sub) == 0) {
+      return(
+        plotly_empty(type = "scatter", mode = "markers") %>%
+          layout(title = list(text = "Seleccione al menos un tramo para visualizar", font = list(color = "gray", size = 12)))
+      )
+    }
+    
+    df_valido <- df_sub %>%
+      filter(!is.na(distancia), !is.na(meta_valor)) %>%
+      arrange(distancia)
+    
+    if (nrow(df_valido) == 0) {
+      return(
+        plotly_empty(type = "scatter", mode = "markers") %>%
+          layout(title = list(text = paste0("Sin valores de metas para ", param_actual), font = list(color = "gray", size = 12)))
+      )
+    }
+    
+    min_g <- min(df_valido$meta_valor)
+    max_g <- max(df_valido$meta_valor)
+    if (min_g == max_g) max_g <- min_g + 1
+    
+    pal_grafico <- leaflet::colorNumeric(palette = "RdYlGn", domain = c(min_g, max_g), na.color = "#808080")
+    df_valido$color_hex <- pal_grafico(df_valido$meta_valor)
+    
+    plot_ly(data = df_valido) %>%
+      add_trace(
+        x = ~distancia,
+        y = ~meta_valor,
+        type = "scatter",
+        mode = "lines+markers",
+        line = list(color = "#2563eb", width = 2),
+        marker = list(size = 9, color = ~color_hex, line = list(color = "#333333", width = 1)),
+        text = ~paste0(
+          "<b>Tramo: </b>", etiqueta_tramo, "<br>",
+          "<b>Distancia: </b>", round(distancia, 2), " km<br>",
+          "<b>Horizonte: </b>", Meta, "<br>",
+          "<b>", param_actual, ": </b>", meta_valor
+        ),
+        hoverinfo = "text",
+        showlegend = FALSE
+      ) %>%
+      layout(
+        title = list(text = paste0("Perfil Longitudinal: ", param_actual, " (", meta_actual, ")"), font = list(size = 14)),
+        xaxis = list(
+          title = list(text = "Distancia (km)", standoff = 15),
+          zeroline = FALSE,
+          showgrid = TRUE
+        ),
+        yaxis = list(
+          title = paste0(param_actual),
+          zeroline = FALSE,
+          showgrid = TRUE
+        ),
+        hovermode = "closest",
+        margin = list(t = 40, b = 50, r = 30, l = 50)
+      )
+  })
+  
+  
+  
+  
+  # ==============================================================================
+  # SECCIÓN: ESCENARIOS DE EVALUACIÓN (SERVER)
+  # ==============================================================================
+  
+  # 1. MAPA BASE DE ESCENARIOS
+  output$mapa_escenarios_agua <- renderLeaflet({
+    
+    # Captura de entradas interactivas
+    Estacionf <- if (is.null(input$RioPerfil)) "General" else input$RioPerfil
+    Radiof    <- if (is.null(input$radioPerfil)) 300 else as.numeric(input$radioPerfil)
+    
+    # Filtrado del Dataframe de Escenarios
+    df_escenarios <- NULL
+    if (exists("PerfilesEscenarios") && !is.null(PerfilesEscenarios)) {
+      df_escenarios <- PerfilesEscenarios[!is.na(PerfilesEscenarios$LATITUD) & !is.na(PerfilesEscenarios$LONGITUD), ]
+      if (!is.null(input$RioPerfil) && input$RioPerfil != "" && "Rio" %in% colnames(df_escenarios)) {
+        df_escenarios_filtrado <- df_escenarios[df_escenarios$Rio == input$RioPerfil, ]
+        if (nrow(df_escenarios_filtrado) > 0) df_escenarios <- df_escenarios_filtrado
+      }
+    }
+    
+    # Inicialización del Mapa y Panes
+    map <- leaflet() %>%
+      addMapPane("principallineas", zIndex = 440) %>%
+      addMapPane("principalpuntos", zIndex = 450) %>%
+      addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery") %>%
+      addTiles(group = "OpenStreetMap") %>%
+      addProviderTiles(providers$Esri.NatGeoWorld, group = "Esri.NatGeoWorld") %>%
+      addProviderTiles(providers$Esri.WorldPhysical, group = "Esri.WorldPhysical") %>%
+      setView(lng = -75.7, lat = 4.8, zoom = 10)
+    
+    # Capa fija de Tramos Hídricos Generales
+    if (exists("Perfilesshp") && !is.null(Perfilesshp)) {
+      tryCatch({
+        shp <- sf::st_zm(Perfilesshp, drop = TRUE, what = "ZM")
+        if (!is.na(sf::st_crs(shp)) && sf::st_crs(shp)$epsg != 4326) {
+          shp <- sf::st_transform(shp, crs = 4326)
+        }
+        map <- map %>% addPolylines(
+          data = shp, group = "Tramos Hídricos", weight = 3, color = "blue",
+          options = pathOptions(pane = "principallineas"),
+          popup = ~paste0("<b>Corriente: </b>", NOMBRE, "<br><b>Tramo: </b>", ESTWQ)
+        )
+      }, error = function(e) {
+        warning("No se pudo cargar la capa espacial Perfilesshp: ", e$message)
+      })
+    }
+    
+    # Capa fija de Puntos de Escenarios de Evaluación
+    if (!is.null(df_escenarios) && nrow(df_escenarios) > 0) {
+      map <- map %>% addCircles(
+        data = df_escenarios, lng = ~LONGITUD, lat = ~LATITUD, group = "Puntos Escenarios",
+        radius = Radiof, weight = 1.5, color = "#000000", fillColor = "#28a745", fillOpacity = 0.85,
+        options = pathOptions(pane = "principalpuntos"),
+        popup = ~paste0(
+          "<b>Estación: </b>", AbcisaNombre, "<br>",
+          "<b>Río: </b>", Rio, "<br>",
+          "<b>Escenario: </b>", Escenario, "<br>",
+          "<b>Kilometraje: </b>", round(Abscisakm, 2), " km"
+        )
+      )
+      coor <- c(min(df_escenarios$LONGITUD), min(df_escenarios$LATITUD), max(df_escenarios$LONGITUD), max(df_escenarios$LATITUD))
+      map <- fitBounds(map, coor[1] - 0.03, coor[2] - 0.03, coor[3] + 0.03, coor[4] + 0.03)
+    }
+    
+    # Herramientas y Controles del Mapa
+    map %>%
+      leaflet.extras::addDrawToolbar(
+        position = "topleft",
+        targetGroup = "Herramientas de dibujo",
+        polylineOptions = leaflet.extras::drawPolylineOptions(showLength = TRUE, metric = TRUE),
+        polygonOptions = leaflet.extras::drawPolygonOptions(showArea = TRUE, metric = TRUE),
+        circleOptions = leaflet.extras::drawCircleOptions(showRadius = TRUE, metric = TRUE),
+        rectangleOptions = leaflet.extras::drawRectangleOptions(showArea = TRUE, metric = TRUE),
+        markerOptions = leaflet.extras::drawMarkerOptions(),
+        circleMarkerOptions = FALSE,
+        editOptions = leaflet.extras::editToolbarOptions(selectedPathOptions = leaflet.extras::selectedPathOptions())
+      ) %>%
+      addLayersControl(
+        position = "topright",
+        baseGroups = c("Esri.WorldImagery", "OpenStreetMap", "Esri.NatGeoWorld", "Esri.WorldPhysical"),
+        overlayGroups = c("Puntos Escenarios", "Tramos Hídricos", "Tramos Escenarios Evaluacion", "Herramientas de dibujo"),
+        options = layersControlOptions(collapsed = TRUE)
+      ) %>%
+      addMiniMap(toggleDisplay = TRUE, position = "topright") %>%
+      htmlwidgets::onRender("
+      function(el, x) {
+        var map = this;
+        var searchControl = L.control({position: 'bottomleft'});
+        searchControl.onAdd = function (map) {
+          var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+          div.style.backgroundColor = 'white'; div.style.padding = '3px'; div.style.display = 'flex'; div.style.alignItems = 'center';
+          div.innerHTML = '<input type=\"text\" class=\"custom-search-input\" placeholder=\"Buscar lugar en Colombia...\" style=\"width: 170px; padding: 2px 5px; border: 1px solid #ccc; outline: none; font-size: 12px; height: 24px;\">' +
+                          '<button class=\"custom-search-btn\" title=\"Buscar\" style=\"background: #fff; border: 1px solid #ccc; border-left: none; cursor: pointer; padding: 2px 6px; height: 24px;\">🔍</button>';
+          L.DomEvent.disableClickPropagation(div);
+          return div;
+        };
+        searchControl.addTo(map);
+
+        var gpsControl = L.control({position: 'bottomright'});
+        var svgTarget = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#444\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"/><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"/><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"12\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"#444\"/></svg>';
+        var svgSpinner = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"2.5\" stroke-linecap=\"round\" style=\"animation: spin 1s linear infinite;\"><style>@keyframes spin { 100% { transform: rotate(360deg); } }</style><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>';
+
+        gpsControl.onAdd = function (map) {
+          var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+          div.style.backgroundColor = 'white'; div.style.padding = '0px';
+          div.innerHTML = '<button class=\"gps-location-btn\" title=\"Obtener mi ubicación\" style=\"background: #fff; border: none; cursor: pointer; height: 30px; width: 30px; display: flex; align-items: center; justify-content: center; outline: none;\">' + svgTarget + '</button>';
+          L.DomEvent.disableClickPropagation(div);
+          return div;
+        };
+        gpsControl.addTo(map);
+
+        var gpsMarker = null, gpsCircle = null;
+        var gpsBtn = el.querySelector('.gps-location-btn');
+        if (gpsBtn) {
+          L.DomEvent.on(gpsBtn, 'click', function() {
+            if (!navigator.geolocation) { alert('Geolocalización no soportada'); return; }
+            gpsBtn.innerHTML = svgSpinner;
+            navigator.geolocation.getCurrentPosition(
+              function(pos) {
+                gpsBtn.innerHTML = svgTarget;
+                var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
+                if (gpsMarker) map.removeLayer(gpsMarker);
+                if (gpsCircle) map.removeLayer(gpsCircle);
+                map.flyTo([lat, lng], 15);
+                gpsCircle = L.circle([lat, lng], { radius: acc, color: '#1d4ed8', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1.5 }).addTo(map);
+                gpsMarker = L.marker([lat, lng]).addTo(map).bindPopup('<b>Ubicación del usuario</b><br>Precisión: ±' + Math.round(acc) + ' m').openPopup();
+              },
+              function(err) { gpsBtn.innerHTML = svgTarget; alert('Error al obtener la ubicación.'); },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+          });
+        }
+
+        var searchInput = el.querySelector('.custom-search-input');
+        var searchBtn = el.querySelector('.custom-search-btn');
+        function executeSearch() {
+          var query = searchInput.value;
+          if (!query) return;
+          fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(query))
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (data && data.length > 0) { map.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 14); }
+              else { alert('Lugar no encontrado en Colombia.'); }
+            });
+        }
+        if (searchBtn && searchInput) {
+          L.DomEvent.on(searchBtn, 'click', executeSearch);
+          L.DomEvent.on(searchInput, 'keypress', function(e) { if (e.keyCode === 13) executeSearch(); });
+        }
+      }
+    ")
+  })
+  
+  
+  # 2. CONTROLES Y ANIMACIÓN DE MESES (ESCENARIOS)
+  meses_list <- c("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+  meses_nombres <- c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+                     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+  
+  anim_state_escenarios <- reactiveValues(
+    running = FALSE,
+    index = 1
+  )
+  
+  auto_invalidate_escenarios <- reactiveTimer(1200)
+  
+  observe({
+    if (anim_state_escenarios$running) {
+      auto_invalidate_escenarios()
+      isolate({
+        anim_state_escenarios$index <- ifelse(anim_state_escenarios$index >= 12, 1, anim_state_escenarios$index + 1)
+        updateSelectInput(session, "sel_mes_manual_escenarios", selected = meses_list[anim_state_escenarios$index])
+      })
+    }
+  })
+  
+  observeEvent(input$btn_play_mes_escenarios, {
+    anim_state_escenarios$running <- !anim_state_escenarios$running
+    if (anim_state_escenarios$running) {
+      updateActionButton(session, "btn_play_mes_escenarios", label = " Pause", icon = icon("pause"))
+    } else {
+      updateActionButton(session, "btn_play_mes_escenarios", label = " Play", icon = icon("play"))
+    }
+  })
+  
+  observeEvent(input$btn_next_mes_escenarios, {
+    anim_state_escenarios$running <- FALSE
+    updateActionButton(session, "btn_play_mes_escenarios", label = " Play", icon = icon("play"))
+    anim_state_escenarios$index <- ifelse(anim_state_escenarios$index >= 12, 1, anim_state_escenarios$index + 1)
+    updateSelectInput(session, "sel_mes_manual_escenarios", selected = meses_list[anim_state_escenarios$index])
+  })
+  
+  observeEvent(input$btn_prev_mes_escenarios, {
+    anim_state_escenarios$running <- FALSE
+    updateActionButton(session, "btn_play_mes_escenarios", label = " Play", icon = icon("play"))
+    anim_state_escenarios$index <- ifelse(anim_state_escenarios$index <= 1, 12, anim_state_escenarios$index - 1)
+    updateSelectInput(session, "sel_mes_manual_escenarios", selected = meses_list[anim_state_escenarios$index])
+  })
+  
+  observeEvent(input$sel_mes_manual_escenarios, {
+    match_idx <- match(input$sel_mes_manual_escenarios, meses_list)
+    if (!is.na(match_idx)) {
+      anim_state_escenarios$index <- match_idx
+    }
+  }, ignoreInit = TRUE)
+  
+  output$txt_mes_activo_escenarios <- renderText({
+    meses_nombres[anim_state_escenarios$index]
+  })
+  
+  
+  # 3. ACTUALIZACIÓN DINÁMICA DEL MAPA MEDIANTE LEAFLET PROXY
+  observe({
+    req(exists("tramos_escenarios"), input$sel_mes_manual_escenarios)
+    
+    mes_col <- input$sel_mes_manual_escenarios
+    mes_nombre_txt <- meses_nombres[anim_state_escenarios$index]
+    
+    datos_shp <- tramos_escenarios
+    df_attr <- sf::st_drop_geometry(datos_shp)
+    
+    # Asegurar tipo numérico limpio
+    for (m in meses_list) {
+      if (m %in% names(df_attr)) {
+        df_attr[[m]] <- suppressWarnings(as.numeric(as.character(df_attr[[m]])))
+      }
+    }
+    
+    # Calcular rango global unificado de todo el año
+    matriz_valores <- as.matrix(df_attr[, intersect(meses_list, names(df_attr))])
+    todos_los_valores <- suppressWarnings(as.numeric(matriz_valores))
+    todos_los_valores <- todos_los_valores[!is.na(todos_los_valores)]
+    
+    min_g <- if (length(todos_los_valores) > 0) min(todos_los_valores) else 0
+    max_g <- if (length(todos_los_valores) > 0) max(todos_los_valores) else 10
+    
+    pal <- colorNumeric(
+      palette = rev("RdYlGn"), 
+      domain = c(min_g, max_g), 
+      na.color = "#808080"
+    )
+    
+    # Preparación directa de vectores
+    val_mes <- suppressWarnings(as.numeric(as.character(df_attr[[mes_col]])))
+    colores_vect <- pal(val_mes)
+    colores_vect[is.na(colores_vect)] <- "#808080"
+    
+    labels_vect <- paste0("Tramo: ", datos_shp$TRAMO, " | Río: ", datos_shp$RIO, " | Valor (", mes_nombre_txt, "): ", ifelse(is.na(val_mes), "Sin Dato", val_mes))
+    
+    popups_vect <- paste0(
+      "<div style='font-family: sans-serif;'>",
+      "<h5 style='margin-bottom:5px; color:#2c3e50;'><b>", datos_shp$TRAMO, "</b></h5>",
+      "<b>Río: </b>", datos_shp$RIO, "<br>",
+      "<b>Uso: </b>", datos_shp$USO, "<br>",
+      "<b>Descripción: </b>", datos_shp$Descripci, "<br>",
+      "<hr style='margin: 5px 0;'>",
+      "<b style='color:#0d6efd;'>Valor ", mes_nombre_txt, ": </b>",
+      "<span style='font-size:14px;' class='badge bg-primary'>", ifelse(is.na(val_mes), "Sin Dato", val_mes), "</span>",
+      "</div>"
+    )
+    
+    # Renderizado liviano sobre el mapa activo
+    leafletProxy("mapa_escenarios_agua") %>%
+      clearGroup("Tramos Escenarios Evaluacion") %>%
+      removeControl(layerId = "leyenda_escenarios") %>%
+      addPolylines(
+        data = datos_shp,
+        group = "Tramos Escenarios Evaluacion",
+        weight = 5,
+        color = colores_vect,
+        opacity = 0.9,
+        options = pathOptions(pane = "principallineas"),
+        label = labels_vect,
+        popup = popups_vect
+      ) %>%
+      addLegend(
+        position = "bottomright",
+        pal = pal,
+        values = c(min_g, max_g),
+        title = paste0("Valor Escenario (", mes_nombre_txt, ")"),
+        layerId = "leyenda_escenarios",
+        opacity = 0.8
+      )
+  })
+  
+  
+  # ==============================================================================
+  # 4. POBLADO DINÁMICO Y CONTROLES DE SELECCIÓN DE TRAMOS
+  # ==============================================================================
+  observe({
+    req(exists("tramos_escenarios_long"))
+    tramos_unicos <- sort(unique(tramos_escenarios_long$etiqueta_tramo))
+    
+    updateSelectizeInput(
+      session,
+      "sel_tramos_grafico_escenarios",
+      choices = tramos_unicos,
+      selected = tramos_unicos,
+      server = TRUE
+    )
+  })
+  
+  # Botón: Activar todas
+  observeEvent(input$btn_seleccionar_todos_escenarios, {
+    req(exists("tramos_escenarios_long"))
+    tramos_unicos <- sort(unique(tramos_escenarios_long$etiqueta_tramo))
+    updateSelectizeInput(session, "sel_tramos_grafico_escenarios", selected = tramos_unicos)
+  })
+  
+  # Botón: Desactivar todas
+  observeEvent(input$btn_deseleccionar_todos_escenarios, {
+    updateSelectizeInput(session, "sel_tramos_grafico_escenarios", selected = character(0))
+  })
+  
+  # Dataset reactivo filtrado
+  df_grafico_escenarios_filtrado <- reactive({
+    req(exists("tramos_escenarios_long"))
+    
+    if (is.null(input$sel_tramos_grafico_escenarios) || length(input$sel_tramos_grafico_escenarios) == 0) {
+      return(tramos_escenarios_long[0, ]) # Retorna dataframe vacío
+    }
+    
+    tramos_escenarios_long %>%
+      dplyr::filter(etiqueta_tramo %in% input$sel_tramos_grafico_escenarios)
+  })
+  
+  
+  # ==============================================================================
+  # 5. RENDERIZADO DEL GRÁFICO DE ESCENARIOS
+  # ==============================================================================
+  output$grafico_escenarios_tramos <- renderPlotly({
+    df <- df_grafico_escenarios_filtrado()
+    
+    if (nrow(df) == 0) {
+      return(
+        plotly_empty(type = "scatter", mode = "markers") %>%
+          layout(title = list(text = "Seleccione al menos un tramo para visualizar", font = list(color = "gray", size = 12)))
+      )
+    }
+    
+    # 1. Asegurar tipo numérico limpio
+    df$escenario_valor_num <- suppressWarnings(as.numeric(as.character(df$escenario_valor)))
+    df_valido <- df[!is.na(df$escenario_valor_num), ]
+    
+    if (nrow(df_valido) == 0) {
+      return(
+        plotly_empty(type = "scatter", mode = "markers") %>%
+          layout(title = list(text = "No hay datos numéricos válidos", font = list(color = "gray", size = 12)))
+      )
+    }
+    
+    # 2. Definir rango global unificado
+    if (exists("tramos_escenarios")) {
+      df_attr <- sf::st_drop_geometry(tramos_escenarios)
+      matriz_v <- as.matrix(df_attr[, intersect(meses_list, names(df_attr))])
+      todos_v <- suppressWarnings(as.numeric(matriz_v))
+      todos_v <- todos_v[!is.na(todos_v)]
+      min_g <- if (length(todos_v) > 0) min(todos_v) else 0
+      max_g <- if (length(todos_v) > 0) max(todos_v) else 16
+    } else {
+      min_g <- min(df_valido$escenario_valor_num)
+      max_g <- max(df_valido$escenario_valor_num)
+    }
+    
+    # 3. Paleta estándar "RdYlGn"
+    pal_grafico <- leaflet::colorNumeric(
+      palette = "RdYlGn",
+      domain = c(min_g, max_g),
+      na.color = "#808080"
+    )
+    
+    # 4. Asignación de color
+    df_valido$color_hex <- pal_grafico(df_valido$escenario_valor_num)
+    
+    # 5. Renderizado en Plotly
+    p <- plot_ly()
+    
+    # Líneas base grises por tramo
+    tramos_presentes <- unique(df_valido$etiqueta_tramo)
+    for (tr in tramos_presentes) {
+      sub_df <- df_valido[df_valido$etiqueta_tramo == tr, ]
+      p <- p %>% add_trace(
+        data = sub_df,
+        x = ~mes_nombre,
+        y = ~escenario_valor_num,
+        type = "scatter",
+        mode = "lines",
+        line = list(width = 1.2, color = "#b0b0b0"),
+        showlegend = FALSE,
+        hoverinfo = "none"
+      )
+    }
+    
+    # Marcadores con color
+    p <- p %>% add_trace(
+      data = df_valido,
+      x = ~mes_nombre,
+      y = ~escenario_valor_num,
+      type = "scatter",
+      mode = "markers",
+      marker = list(
+        size = 8,
+        color = ~color_hex,
+        opacity = 1
+      ),
+      text = ~paste0(
+        "<b>Río: </b>", RIO, "<br>",
+        "<b>Tramo: </b>", TRAMO, "<br>",
+        "<b>Uso: </b>", USO, "<br>",
+        "<b>Descripción: </b>", Descripci, "<br>",
+        "<b>Mes: </b>", mes_nombre, "<br>",
+        "<b>Valor Escenario: </b>", escenario_valor_num
+      ),
+      hoverinfo = "text",
+      showlegend = FALSE
+    )
+    
+    # Configuración de ejes
+    p %>% layout(
+      showlegend = FALSE,
+      xaxis = list(
+        title = list(text = "Mes del Año", standoff = 15),
+        zeroline = FALSE
+      ),
+      yaxis = list(
+        title = "Valor Escenario de Evaluación",
+        range = c(min_g - 0.5, max_g + 0.5),
+        zeroline = FALSE
+      ),
+      hovermode = "closest",
+      margin = list(t = 20, b = 50, r = 30, l = 50)
+    )
+  })
+  
+  
+  # ==============================================================================
+  # 6. SINCRONIZACIÓN DE LÍNEA VERTICAL DEL MES ACTIVO EN GRÁFICO
+  # ==============================================================================
+  observe({
+    req(input$sel_mes_manual_escenarios, exists("tramos_escenarios_long"))
+    
+    mes_actual_txt <- meses_nombres[anim_state_escenarios$index]
+    
+    mes_label <- c("Ene", "Feb", "Mar", "Abr", "May", "Jun", 
+                   "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")[anim_state_escenarios$index]
+    
+    if (is.factor(tramos_escenarios_long$mes_nombre)) {
+      mes_label <- levels(tramos_escenarios_long$mes_nombre)[anim_state_escenarios$index]
+    }
+    
+    plotlyProxy("grafico_escenarios_tramos", session = session) %>%
+      plotlyProxyInvoke(
+        "relayout",
+        list(
+          shapes = list(
+            list(
+              type = "line",
+              x0 = mes_label,
+              x1 = mes_label,
+              y0 = 0,
+              y1 = 1,
+              yref = "paper",
+              line = list(color = "#0000FF", width = 2, dash = "dash")
+            )
+          ),
+          annotations = list(
+            list(
+              x = mes_label,
+              y = 1,
+              yref = "paper",
+              text = paste0("Mes Activo: ", mes_actual_txt),
+              showarrow = FALSE,
+              xanchor = "center",
+              yanchor = "bottom",
+              font = list(color = "#0000FF", size = 11, family = "sans-serif")
+            )
+          )
+        )
+      )
+  })
+  
+  
+  # ==============================================================================
+  # 7. INTERACTIVIDAD EN MAPA
+  # ==============================================================================
+  observeEvent(input$mapa_escenarios_agua_shape_click, {
+    click_data <- input$mapa_escenarios_agua_shape_click
+    
+    if (!is.null(click_data$group) && click_data$group == "Tramos Escenarios Evaluacion") {
+      # Lógica de resaltado interactivo
+    }
+  })  
+  
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  }
+
+
 
 shinyApp(ui = ui, server = server)
