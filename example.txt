@@ -1,397 +1,858 @@
 
-  # Mapa ICA IDEAM --------------------
+
+
+if (!require("leaflet")) install.packages("leaflet"); library("leaflet")
+if (!require("shinydashboard")) install.packages("shinydashboard"); library("shinydashboard")
+if (!require("rlang")) install.packages("rlang"); library("rlang")
+if (!require("dplyr")) install.packages("dplyr"); library("dplyr")
+if (!require("raster")) install.packages("raster"); library("raster")
+if (!require("shiny")) install.packages("shiny"); library("shiny")
+if (!require("reshape")) install.packages("reshape"); library("reshape")
+if (!require("ggplot2")) install.packages("ggplot2"); library("ggplot2")
+if (!require("plotly")) install.packages("plotly"); library("plotly")
+if (!require("DT")) install.packages("DT"); library("DT")
+if (!require("sf")) install.packages("sf"); library("sf")
+if (!require("stringr")) install.packages("stringr"); library("stringr")
+if (!require("lubridate")) install.packages("lubridate"); library("lubridate")
+if (!require("tidyr")) install.packages("tidyr"); library("tidyr")
+if (!require("shinyjs")) install.packages("shinyjs"); library("shinyjs")
+if (!require("heatmaply")) install.packages("heatmaply"); library("heatmaply")
+if (!require("shinyHeatmaply")) install.packages("shinyHeatmaply"); library("shinyHeatmaply")
+if (!require("catmaply")) install.packages("catmaply"); library("catmaply")
+if (!require("RColorBrewer")) install.packages("RColorBrewer"); library("RColorBrewer")
+if (!require("tidyverse")) install.packages("tidyverse"); library("tidyverse")
+if (!require("colorspace")) install.packages("colorspace"); library("colorspace")
+if (!require("readxl")) install.packages("readxl"); library("readxl")
+if (!require("writexl")) install.packages("writexl"); library("writexl")
+if (!require("leaflet.extras")) install.packages("leaflet.extras"); library("leaflet.extras")
+if (!require("shinythemes")) install.packages("shinythemes"); library("shinythemes")
+if (!require("visNetwork")) install.packages("visNetwork"); library("visNetwork")
+
+library(visNetwork)
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(shiny)
+library(bslib)
+library(leaflet)
+library(lubridate)
+library(leaflet.extras)
+library(tidyverse)
+library(DT)
+library(sf)
+
+
+
+Perfiles_AbscisaInicio = read.csv("ERA_Perfiles_AbscisaInicio.csv", fileEncoding="utf-8", stringsAsFactors=F, check.names=F)
+Perfilesshp = read_sf(dsn="CALIDAD_RIOS_TRAMOS.shp")
+Perfilesshp = st_zm(Perfilesshp, drop = T, what = "ZM")
+Perfilesshp = Perfilesshp[order(Perfilesshp$Codrio),]
+Perfilesshp$Abscisakm = NA
+Perfilesshp$N = 1:nrow(Perfilesshp)
+
+for (i in 1:length(unique(Perfilesshp$NOMBRE))){
+  Corriente = unique(Perfilesshp$NOMBRE)[i]
+  Perfilesshp1 = Perfilesshp[Perfilesshp$NOMBRE==Corriente,]
+  Perfilesshp$Abscisakm[Perfilesshp1$N[1]] = Perfiles_AbscisaInicio[Perfiles_AbscisaInicio$Name==Corriente,"Abscisa_Inicio_Km"] + Perfilesshp1$Length[1]
+  for (j in 2:nrow(Perfilesshp1)){
+    Perfilesshp$Abscisakm[Perfilesshp1$N[j]] = Perfilesshp$Abscisakm[Perfilesshp1$N[j]-1] + Perfilesshp1$Length[j]
+  }
+}
+
+Perfilesshp$ID = paste0(Perfilesshp$ESTWQ, "-", Perfilesshp$Codrio)
+PerfilesCapasMapa <- read.csv("ERA_PerfilesCapasMapa.csv", fileEncoding = "utf-8", stringsAsFactors = FALSE, check.names = FALSE, skip = 1)
+Perfiles_Parametros <- read.csv("ERA_Perfiles_Parametros.csv", fileEncoding = "utf-8", stringsAsFactors = FALSE, check.names = FALSE)
+Perfiles_Parametros <- Perfiles_Parametros[!is.na(Perfiles_Parametros$Incluir), ]
+Perfiles_Parametros <- Perfiles_Parametros[order(Perfiles_Parametros$Incluir), ]
+Perfiles_Datos <- read.csv("ERA_Perfiles_WQ_Depurados.csv", stringsAsFactors = FALSE, fileEncoding = "utf-8", check.names = FALSE)
+Perfiles_Datos <- Perfiles_Datos[, c("Fecha", "NOMBRE_ESTACION", "CODIGO", "Tramo", Perfiles_Parametros$Parametros)]
+Perfiles_Datos <- unique(Perfiles_Datos)
+Perfiles_Datos <- Perfiles_Datos[!is.na(Perfiles_Datos$Tramo), ]
+Perfiles_Datos$ID <- paste0(Perfiles_Datos$CODIGO, "-", Perfiles_Datos$Tramo)
+Perfiles_Datos <- merge(Perfiles_Datos, Perfilesshp, by.x = "ID", by.y = "ID")
+Perfiles_Datos$AbcisaNombre <- paste0("Km ", round(Perfiles_Datos$Abscisakm, 1), " - ", Perfiles_Datos$NOMBRE_ESTACION)
+Perfiles_Datos <- merge(Perfiles_Datos, ICA_estaciones[, c("Codigo", "LONGITUD", "LATITUD", "NOMBRE")], by.x = "CODIGO", by.y = "Codigo")
+names(Perfiles_Datos)[names(Perfiles_Datos) == "NOMBRE.y"] <- "NOMBRE_COMPLETO"
+names(Perfiles_Datos)[names(Perfiles_Datos) == "NOMBRE.x"] <- "NOMBRE"
+
+
+# ==============================================================================
+# 1. METAS ANTERIORES (CORREGIDO: CRUCE POR LLAVE ID COMPUESTA)
+# ==============================================================================
+PerfilesMetas <- read.csv("ERA_Perfiles_Metas.csv", stringsAsFactors = FALSE, check.names = FALSE)
+
+# Construir la llave única (Estación + Tramo)
+PerfilesMetas$ID <- paste0(trimws(PerfilesMetas$Estacion), "-", trimws(PerfilesMetas$`Tramo rio`))
+
+# Cruce usando 'ID' para asegurar la correspondencia exacta con el shapefile
+PerfilesMetas <- merge(Perfilesshp, PerfilesMetas, by.x = "ID", by.y = "ID", all.y = TRUE)
+PerfilesMetas <- PerfilesMetas[order(PerfilesMetas$Meta, PerfilesMetas$Rio, PerfilesMetas$Abscisakm), ]
+PerfilesMetas$AbcisaNombre <- paste0("Km ", round(PerfilesMetas$Abscisakm, 1), " - ", PerfilesMetas$NOMBRE_ESTACION)
+PerfilesMetas <- PerfilesMetas[!is.na(PerfilesMetas$Abscisakm), ]
+
+VALORES <- list()
+rm(Corriente, Perfilesshp1)
+gc(verbose = FALSE)
+
+
+# ==============================================================================
+# 2. ESCENARIOS DE EVALUACIÓN (SE MANTIENE IGUAL)
+# ==============================================================================
+tramos_escenarios_shp <- read_sf(dsn = "TRAMOS_PORH.shp")
+tramos_escenarios     <- st_zm(tramos_escenarios_shp, drop = TRUE, what = "ZM")
+tramos_escenarios     <- st_transform(tramos_escenarios, crs = 4326)
+
+if ("distancia" %in% names(tramos_escenarios)) {
+  tramos_escenarios$distancia <- as.numeric(as.character(tramos_escenarios$distancia))
+}
+
+meses_cols <- c("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+for (m in meses_cols) {
+  if (m %in% names(tramos_escenarios)) {
+    tramos_escenarios[[m]] <- as.numeric(as.character(tramos_escenarios[[m]]))
+  }
+}
+
+tramos_escenarios_long <- tramos_escenarios %>%
+  st_drop_geometry() %>%
+  mutate(
+    distancia = as.numeric(distancia),
+    etiqueta_tramo = paste0(RIO, " | ", TRAMO, " (", Descripci, ")")
+  ) %>%
+  pivot_longer(
+    cols = all_of(meses_cols),
+    names_to = "mes_id",
+    values_to = "escenario_valor"
+  ) %>%
+  mutate(
+    mes_nombre = factor(
+      mes_id,
+      levels = meses_cols,
+      labels = c("Ene", "Feb", "Mar", "Abr", "May", "Jun", 
+                 "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+    ),
+    mes_num = as.numeric(mes_nombre)
+  )
+
+
+# ==============================================================================
+# 3. METAS NUEVAS (CORREGIDO: FILTRADO ESTRICTO DE PARÁMETROS Y LIMPIEZA)
+# ==============================================================================
+tramos_meta_shp <- read_sf("Tramos_D2k_Otun.shp")
+tramos_meta_shp <- st_zm(tramos_meta_shp, drop = TRUE, what = "ZM")
+tramos_meta_shp <- st_transform(tramos_meta_shp, crs = 4326)
+
+if ("distancia" %in% names(tramos_meta_shp)) {
+  tramos_meta_shp$distancia <- as.numeric(as.character(tramos_meta_shp$distancia))
+}
+
+perfiles_metas_excel <- read_excel("ERA_Perfiles_Metas_Nuevas_Final.xlsx") %>% 
+  select(-contains("Unnamed")) %>%
+  mutate(
+    Rio = trimws(toupper(Rio)),
+    Tramo = as.character(Tramo)
+  )
+
+# Exclusión estricta de metadatos no numéricos
+cols_no_parametros <- c("Identificador", "Meta", "Rio", "Tramo", "Uso", "Tramo rio", "Nombre Tramo")
+parametros_calidad <- setdiff(names(perfiles_metas_excel), cols_no_parametros)
+
+perfiles_metas_excel <- perfiles_metas_excel %>%
+  mutate(across(all_of(parametros_calidad), ~ as.numeric(as.character(.))))
+
+tramos_meta_calidad_long <- perfiles_metas_excel %>%
+  pivot_longer(
+    cols = all_of(parametros_calidad),
+    names_to = "Parametro",
+    values_to = "meta_valor"
+  ) %>%
+  filter(!is.na(meta_valor)) %>%
+  mutate(
+    etiqueta_tramo = paste0(Rio, " | Tramo ", Tramo)
+  )
+
+
+
+
+
+
+    nav_panel_hidden(
+        value = "sec_perfiles",
+        div(
+          h3("Perfiles de calidad"),
+          hr(),
+          br(),
+          
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("map-location-dot"), " Geovisor de Perfiles por Corriente"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_mapa_perfil_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_mapa_perfil_body",
+              class = "collapse show",
+              card_body(
+                padding = 0,
+                leafletOutput("mapa_perfil", height = "600px")
+              )
+            )
+          ),
+          
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("chart-line"), " Análisis de Perfil por Parámetro"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_grafico_perfil_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_grafico_perfil_body",
+              class = "collapse show",
+              card_body(
+                fluidRow(
+                  column(
+                    width = 6,
+                    selectInput(
+                      inputId = "parametro_perfil",
+                      label = "Seleccione el Parámetro:",
+                      choices = c("Cargando..." = ""),
+                      selected = NULL,
+                      width = "100%"
+                    )
+                  ),
+                  column(
+                    width = 6,
+                    div(
+                      class = "d-flex align-items-center h-100 mt-3",
+                      checkboxInput(
+                        inputId = "log_scale_perfil",
+                        label = "Eje Y en escala logarítmica",
+                        value = FALSE
+                      )
+                    )
+                  )
+                ),
+                hr(),
+                plotlyOutput("grafico_perfil_render", height = "500px")
+              )
+            )
+          ),
+
+          card(
+            full_screen = TRUE,
+            class = "shadow-sm border-0 mb-4",
+            card_header(
+              class = "d-flex align-items-center justify-content-between",
+              div(icon("water"), " Perfil Longitudinal ICA-5 [IDEAM]"),
+              tags$button(
+                class = "btn btn-sm p-0 text-reset border-0 opacity-75 opacity-100-hover me-4",
+                type = "button",
+                `data-bs-toggle` = "collapse",
+                `data-bs-target` = "#collapse_perfil0_body",
+                `aria-expanded` = "true",
+                icon("minus")
+              )
+            ),
+            div(
+              id = "collapse_perfil0_body",
+              class = "collapse show",
+              card_body(
+                plotlyOutput("Perfil0", height = "500px")
+              )
+            )
+          )
+        )
+      ),
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   
-  lapply(1:2, function(h) {
-    output[[paste0("mapICA",h)]] = renderLeaflet({
-      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
-      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
-      req(input$FechaICA)
-      req(input$radioICA)
-      Fechaf=input$FechaICA
-      Radiof=input$radioICA
+  
+  output[["mapa_perfil"]] <- renderLeaflet({
+    req(input$radioPerfil)
+    Radiof <- input$radioPerfil
+    
+    shapescontexto <- PerfilesCapasMapa
+    shapesContexto <- shapescontexto$ShapesContexto
+    NshapesContexto <- shapescontexto$NombresShapesContexto
+    CshapesContexto <- shapescontexto$ColorShapesContexto
+    EshapesContexto <- shapescontexto$Etiqueta
+    
+    map <- leaflet() %>%
+      addMapPane("principalpuntos", zIndex = 450) %>%
+      addMapPane("principallineas", zIndex = 440) %>%
+      addMapPane("principalpoligonos", zIndex = 430) %>%
+      addMapPane("puntos", zIndex = 420) %>%
+      addMapPane("lineas", zIndex = 410) %>%
+      addMapPane("poligonos", zIndex = 400)
+    
+    for (i in 1:length(NshapesContexto)) {
+      shp <- read_sf(dsn = paste0(shapesContexto[i]))
+      labs <- lapply(seq(nrow(shp)), function(j) {
+        paste0('<p>', shp[[EshapesContexto[i]]][j], '<p>')
+      })
       
-      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
-      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
-      
-      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
-      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) 
-      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
-      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
-      Cat=CategoriasICA
-      for (i in 1:nrow(ICA_datosSub)){
-        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
-          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
-        }
-        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
-          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
-        }
+      if (st_geometry_type(shp, by_geometry = FALSE)[1] == "MULTIPOLYGON" | st_geometry_type(shp, by_geometry = FALSE)[1] == "POLYGON") {
+        shp <- st_zm(shp, drop = TRUE, what = "ZM")
+        map <- map %>% addPolygons(data = shp, group = NshapesContexto[i], weight = 2,
+                                   color = CshapesContexto[i], options = pathOptions(pane = "poligonos"),
+                                   highlight = highlightOptions(weight = 3, color = "yellow", fillOpacity = 0.3, bringToFront = FALSE),
+                                   label = lapply(labs, htmltools::HTML))
       }
-      
-      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs[h],"LATITUD" ,"LONGITUD",ICAsc[h],"CORRIENTE")]
-      
-      colnames(ICA_datosSub)
-      shapesContexto=shapescontexto$ShapesContexto
-      NshapesContexto=shapescontexto$NombresShapesContexto
-      CshapesContexto=shapescontexto$ColorShapesContexto
-      EshapesContexto=shapescontexto$Etiqueta
-      
-      map = leaflet()%>%
-        addMapPane("principalpuntos", zIndex = 450) %>%
-        addMapPane("principallineas", zIndex = 440) %>%
-        addMapPane("principalpoligonos", zIndex = 400) %>%
-        addMapPane("puntos", zIndex = 420) %>%
-        addMapPane("lineas", zIndex = 410) %>%
-        addMapPane("poligonos", zIndex = 400)
-      
-      CategoriasSub=CategoriasICA[CategoriasICA$Variable=="ICA IDEAM",]
-      levels=CategoriasSub$Categoria
-      ICA_datosSub[,ICAsc[h]] = factor(ICA_datosSub[,ICAsc[h]],levels)
-      factpal = colorFactor(CategoriasSub$CodigoColor[order(levels)], levels)
-      
-      labsEstaciones = lapply(seq(nrow(ICA_datosSub)), function(j) {
-        paste0( 'Estacion : ', ICA_datosSub$Estacion[j], '<p></p>',
-                ICAs[h], " : ", round(ICA_datosSub[j,ICAs[h]],3), '<p></p>',
-                ICAsc[h], " : ", ICA_datosSub[j,ICAsc[h]], '<p></p>',
-                "Corriente", " : ", ICA_datosSub[j,"CORRIENTE"], '<p></p>'
-        )
-      })
-      labsC5 = lapply(seq(nrow(RedHidrica)), function(i) {
-        paste0('Nombre Corriente : ', RedHidrica[["NombreDren"]][i]
-        )
-      })
-      labsC8 = lapply(seq(nrow(Municipios)), function(i) {
-        paste0('Municipio : ', Municipios[["MPIO_CNMBR"]][i]
-        )
-      })
-      
-      Nleyenda=ICAs[h]
-      
-      map <- map %>%
-        addCircles(data= ICA_datosSub,lng = ICA_datosSub$LONGITUD, lat = ICA_datosSub$LATITUD,
-                   radius = Radiof, weight = 1, group ="Estaciones ICA", fillOpacity = 1,
-                   color = factpal(ICA_datosSub[,ICAsc[h]]) , options = pathOptions(pane = "principalpuntos"),
-                   highlight = highlightOptions(weight = 1,
-                                                color = "yellow",
-                                                fillOpacity = 1,
-                                                bringToFront = TRUE),
-                   label = lapply(labsEstaciones, htmltools::HTML)) %>%
-        addLegend("topright", pal = factpal, values = ICA_datosSub[,ICAsc[h]],
-                  title = Nleyenda,
-                  opacity = 1)
-      
-      map = map %>%
-        addTiles(group = "OpenStreetMap") %>%
-        addProviderTiles(providers$Esri.NatGeoWorldMap, group = "Esri.NatGeoWorld") %>%
-        addProviderTiles(providers$Esri.WorldPhysical, group = "Esri.WorldPhysical") %>%
-        addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery")  %>%
-        addPolylines(data = RedHidrica, color = "blue", weight = 1.5, opacity = 0.5,
-                     group = "Red Hidrica",
-                     options = pathOptions(pane = "principallineas"),
-                     highlight = highlightOptions(weight = 2.2,
-                                                  color = "white",
-                                                  fillOpacity = 0.7,
-                                                  bringToFront = T),
-                     label = lapply(labsC5, htmltools::HTML)) %>%
-        addPolygons(data = Municipios, stroke = T,
-                    group = "Municipios",
-                    smoothFactor = 0.2, fillOpacity = 0.4,
-                    color = "black", fillColor = "#e5abf5",opacity = 0.9, weight = 1, dashArray = "3",
-                    options = pathOptions(pane = "principalpoligonos"),
-                    highlight = highlightOptions(weight = 1.5,
-                                                 color = "white",
-                                                 fillOpacity = 0.2,
-                                                 bringToFront = F),
-                    label = lapply(labsC8, htmltools::HTML)) %>%
-        
-        # --- BARRA DE HERRAMIENTAS DE DIBUJO Y MEDICIÓN (TOPLEFT) ---
-        leaflet.extras::addDrawToolbar(
-          position = "topleft",
-          targetGroup = "DibujosUsuario",
-          polylineOptions = leaflet.extras::drawPolylineOptions(showLength = TRUE, metric = TRUE),
-          polygonOptions = leaflet.extras::drawPolygonOptions(showArea = TRUE, metric = TRUE),
-          circleOptions = leaflet.extras::drawCircleOptions(showRadius = TRUE, metric = TRUE),
-          rectangleOptions = leaflet.extras::drawRectangleOptions(showArea = TRUE, metric = TRUE),
-          markerOptions = leaflet.extras::drawMarkerOptions(),
-          circleMarkerOptions = FALSE,
-          editOptions = leaflet.extras::editToolbarOptions(selectedPathOptions = leaflet.extras::selectedPathOptions())
-        ) %>%
-        
-        addLayersControl(
-          position = "topright",
-          baseGroups = c("OpenStreetMap", "Esri.NatGeoWorld","Esri.WorldPhysical","Esri.WorldImagery"),
-          overlayGroups = c("Estaciones ICA", "Red Hidrica", "Municipios", "DibujosUsuario"),
-          options = layersControlOptions(collapsed = TRUE)
-        )  %>%
-        hideGroup("Municipios") %>%
-        addMiniMap(
-          toggleDisplay = TRUE, position = "topright") %>%
-        
-        # --- BÚSQUEDA (BOTTOMLEFT) Y GPS PROFESIONAL (BOTTOMRIGHT) ---
-        htmlwidgets::onRender("
-        function(el, x) {
-          var map = this;
-          
-          // -------------------------------------------------------------
-          // 1. CONTROL DE BÚSQUEDA (BOTTOMLEFT)
-          // -------------------------------------------------------------
-          var searchControl = L.control({position: 'bottomleft'});
-          
-          searchControl.onAdd = function (map) {
-            var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
-            div.style.backgroundColor = 'white';
-            div.style.padding = '3px';
-            div.style.display = 'flex';
-            div.style.alignItems = 'center';
-
-            var inputId = 'customSearchInput_' + el.id;
-            var listId = 'customSearchList_' + el.id;
-
-            div.innerHTML = '<input type=\"text\" id=\"' + inputId + '\" list=\"' + listId + '\" placeholder=\"Buscar lugar en Colombia...\" style=\"width: 170px; padding: 2px 5px; border: 1px solid #ccc; outline: none; font-size: 12px; height: 24px;\">' +
-                            '<datalist id=\"' + listId + '\"></datalist>' +
-                            '<button id=\"customSearchBtn_' + el.id + '\" title=\"Buscar\" style=\"background: #fff; border: 1px solid #ccc; border-left: none; cursor: pointer; padding: 2px 6px; height: 24px;\">🔍</button>';
-
-            L.DomEvent.disableClickPropagation(div);
-            return div;
-          };
-
-          searchControl.addTo(map);
-
-          // -------------------------------------------------------------
-          // 2. CONTROL INDEPENDIENTE GPS CON SVG NATIVO (BOTTOMRIGHT)
-          // -------------------------------------------------------------
-          var gpsControl = L.control({position: 'bottomright'});
-
-          var svgTarget = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#444\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"/><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"/><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"12\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"#444\"/></svg>';
-          var svgSpinner = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"2.5\" stroke-linecap=\"round\" style=\"animation: spin 1s linear infinite;\"><style>@keyframes spin { 100% { transform: rotate(360deg); } }</style><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>';
-
-          gpsControl.onAdd = function (map) {
-            var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
-            div.style.backgroundColor = 'white';
-            div.style.padding = '0px';
-
-            var gpsBtnId = 'gpsLocationBtn_' + el.id;
-            div.innerHTML = '<button id=\"' + gpsBtnId + '\" title=\"Obtener mi ubicación\" style=\"background: #fff; border: none; cursor: pointer; height: 30px; width: 30px; display: flex; align-items: center; justify-content: center; outline: none;\">' + svgTarget + '</button>';
-
-            L.DomEvent.disableClickPropagation(div);
-            return div;
-          };
-
-          gpsControl.addTo(map);
-
-          // -------------------------------------------------------------
-          // 3. LÓGICA DE EVENTOS
-          // -------------------------------------------------------------
-          setTimeout(function() {
-            var input = document.getElementById('customSearchInput_' + el.id);
-            var dataList = document.getElementById('customSearchList_' + el.id);
-            var btn = document.getElementById('customSearchBtn_' + el.id);
-            var gpsBtn = document.getElementById('gpsLocationBtn_' + el.id);
-            var searchResults = {};
-
-            var gpsMarker = null;
-            var gpsCircle = null;
-
-            // Lógica de Búsqueda
-            if(input && dataList) {
-              input.addEventListener('input', function() {
-                var query = input.value;
-                if (query.length < 3) return;
-
-                var url = 'https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(query);
-
-                fetch(url)
-                  .then(function(res) { return res.json(); })
-                  .then(function(data) {
-                    dataList.innerHTML = '';
-                    searchResults = {};
-                    
-                    data.forEach(function(item) {
-                      var option = document.createElement('option');
-                      option.value = item.display_name;
-                      dataList.appendChild(option);
-                      searchResults[item.display_name] = { lat: item.lat, lon: item.lon };
-                    });
-                  });
-              });
-
-              function executeFlyTo() {
-                var selectedVal = input.value;
-                if (searchResults[selectedVal]) {
-                  var coords = searchResults[selectedVal];
-                  map.flyTo([parseFloat(coords.lat), parseFloat(coords.lon)], 14);
-                } else if (selectedVal) {
-                  fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(selectedVal))
-                    .then(function(res) { return res.json(); })
-                    .then(function(data) {
-                      if (data && data.length > 0) {
-                        map.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 14);
-                      } else {
-                        alert('Lugar no encontrado en Colombia.');
-                      }
-                    });
-                }
-              }
-
-              btn.addEventListener('click', executeFlyTo);
-              input.addEventListener('change', executeFlyTo);
-            }
-
-            // Lógica del Botón GPS
-            if(gpsBtn) {
-              gpsBtn.addEventListener('click', function() {
-                if (!navigator.geolocation) {
-                  alert('Geolocalización no soportada en este navegador.');
-                  return;
-                }
-
-                gpsBtn.innerHTML = svgSpinner;
-
-                navigator.geolocation.getCurrentPosition(
-                  function(pos) {
-                    gpsBtn.innerHTML = svgTarget;
-                    var lat = pos.coords.latitude;
-                    var lng = pos.coords.longitude;
-                    var acc = pos.coords.accuracy;
-
-                    if (gpsMarker) map.removeLayer(gpsMarker);
-                    if (gpsCircle) map.removeLayer(gpsCircle);
-
-                    map.flyTo([lat, lng], 15);
-
-                    gpsCircle = L.circle([lat, lng], {
-                      radius: acc,
-                      color: '#1d4ed8',
-                      fillColor: '#3b82f6',
-                      fillOpacity: 0.15,
-                      weight: 1.5
-                    }).addTo(map);
-
-                    gpsMarker = L.marker([lat, lng])
-                      .addTo(map)
-                      .bindPopup('<b>Ubicación del usuario</b><br>Margen de precisión: ±' + Math.round(acc) + ' m')
-                      .openPopup();
-                  },
-                  function(err) {
-                    gpsBtn.innerHTML = svgTarget;
-                    var msjs = {
-                      1: 'El acceso a la ubicación fue denegado. Si estás ejecutando la app en RStudio, abre la aplicación en el navegador externo (Open in Browser).',
-                      2: 'Ubicación no disponible.',
-                      3: 'Tiempo de espera agotado al consultar el GPS.'
-                    };
-                    alert(msjs[err.code] || 'Error al obtener la ubicación.');
-                  },
-                  { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-                );
-              });
-            }
-          }, 500);
-        }
-      ")
-      
-      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
-      fitBounds(map, coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
+      if (st_geometry_type(shp, by_geometry = FALSE)[1] == "POINT") {
+        map <- map %>% addCircles(data = as.data.frame(shp), lng = as.data.frame(st_coordinates(shp))[, "X"], lat = as.data.frame(st_coordinates(shp))[, "Y"],
+                                  radius = 50, weight = 1, group = NshapesContexto[i],
+                                  color = CshapesContexto[i], options = pathOptions(pane = "principalpuntos"),
+                                  highlight = highlightOptions(weight = 3, color = "yellow", fillOpacity = 0.3, bringToFront = FALSE),
+                                  label = lapply(labs, htmltools::HTML))
+      }
+      if (st_geometry_type(shp, by_geometry = FALSE)[1] == "MULTILINESTRING" | st_geometry_type(shp, by_geometry = FALSE)[1] == "LINESTRING") {
+        shp <- st_zm(shp, drop = TRUE, what = "ZM")
+        map <- map %>% addPolylines(data = shp, group = NshapesContexto[i], weight = 1.5,
+                                    color = CshapesContexto[i], options = pathOptions(pane = "principallineas"),
+                                    highlight = highlightOptions(weight = 2, color = "yellow", fillOpacity = 0.3, bringToFront = FALSE),
+                                    label = lapply(labs, htmltools::HTML))
+      }
+    }
+    
+    shp <- st_zm(Perfilesshp, drop = TRUE, what = "ZM")
+    labs <- lapply(seq(nrow(shp)), function(j) {
+      paste0('<p>', "Corriente: ", shp[["NOMBRE"]][j], '<p>',
+             "Longitud tramo: ", shp[["Length"]][j], '<p>',
+             "Estacion tramo: ", shp[["ESTWQ"]][j], '<p>')
     })
-  })
-  
-  proxy1ica = leafletProxy("mapICA1")
-  proxy2ica = leafletProxy("mapICA2")
-  
-  observeEvent(input$EstacionICA,{
-    req(input$FechaICA)
+    map <- map %>% addPolylines(data = shp, group = "Rios Perfiles", weight = 3,
+                                color = "blue", options = pathOptions(pane = "principallineas"),
+                                highlight = highlightOptions(weight = 2, color = "red", fillOpacity = 0.3, bringToFront = FALSE),
+                                label = lapply(labs, htmltools::HTML))
     
-    if(input$EstacionICA!="Todas"){
-      Estacionf=input$EstacionICA
-      selected_polygon = ICA_datos1[ICA_datos1$Estacion==Estacionf,]
-      x=unique(selected_polygon$LONGITUD)
-      y=unique(selected_polygon$LATITUD)
-      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
-      proxy1ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
-      proxy1ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon1ICA")
+    estaciones <- unique(ICA_estaciones[, c("NOMBRE", "Codigo", "CORRIENTE", "LONGITUD", "LATITUD")])
+    estaciones <- estaciones[!is.element(unique(estaciones$Codigo), sort(unique(Perfiles_Datos$CODIGO))), ]
+    estaciones <- estaciones[!is.na(estaciones$LONGITUD), ]
+    estaciones <- estaciones[!is.na(estaciones$LATITUD), ]
+    
+    labs <- lapply(seq(nrow(estaciones)), function(j) {
+      paste0('Nombre Estacion : ', estaciones[["NOMBRE"]][j], '<p></p>',
+             'Codigo : ', estaciones[["Codigo"]][j], '<p></p>',
+             'Corriente : ', estaciones[["CORRIENTE"]][j], '<p></p>',
+             "Latitud : ", estaciones[["LATITUD"]][j], '<p></p>',
+             "Longitud : ", estaciones[["LONGITUD"]][j], '<p></p>')
+    })
+    map <- map %>% addCircles(data = estaciones, lng = estaciones$LONGITUD, lat = estaciones$LATITUD,
+                              radius = 400, weight = 1, group = "Otras Estaciones", fillOpacity = 0.8,
+                              color = "#f5d65d", options = pathOptions(pane = "principalpuntos"),
+                              highlight = highlightOptions(weight = 1, color = "yellow", fillOpacity = 1, bringToFront = TRUE),
+                              label = lapply(labs, htmltools::HTML))
+    
+    CategoriasSub <- sort(unique(Perfilesshp$NOMBRE))
+    levels <- sort(unique(Perfilesshp$NOMBRE))
+    Perfiles_Datos$CORRIENTE <- factor(Perfiles_Datos$NOMBRE, levels)
+    
+    n <- length(unique(Perfilesshp$NOMBRE))
+    qual_col_pals <- brewer.pal.info[brewer.pal.info$category == 'qual', ]
+    col_vector <- unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+    factpal <- colorFactor(col_vector[10:(n + 9)], levels)
+    
+    estaciones <- unique(Perfiles_Datos[, c("AbcisaNombre", "CODIGO", "NOMBRE_ESTACION", "CORRIENTE", "Abscisakm", "LONGITUD", "LATITUD", "NOMBRE_COMPLETO")])
+    labs <- lapply(seq(nrow(estaciones)), function(j) {
+      paste0('Nombre Completo Estacion : ', estaciones[["AbcisaNombre"]][j], '<p></p>',
+             'Codigo : ', estaciones[["CODIGO"]][j], '<p></p>',
+             'Corriente : ', estaciones[["CORRIENTE"]][j], '<p></p>',
+             'Estacion : ', estaciones[["NOMBRE_COMPLETO"]][j], '<p></p>',
+             "Latitud : ", estaciones[["LATITUD"]][j], '<p></p>',
+             "Longitud : ", estaciones[["LONGITUD"]][j], '<p></p>',
+             "Abscisa Kilometro : ", round(estaciones[["Abscisakm"]][j], 2), '<p></p>')
+    })
+    
+    Nleyenda <- "Estaciones por Corriente"
+    map <- map %>% addCircles(data = estaciones, lng = estaciones$LONGITUD, lat = estaciones$LATITUD,
+                              radius = Radiof, weight = 1, group = "Estaciones Perfiles", fillOpacity = 0.8, fillColor = factpal(estaciones$CORRIENTE),
+                              color = "black", options = pathOptions(pane = "principalpuntos"),
+                              highlight = highlightOptions(weight = 10, color = "yellow", fillOpacity = 1, bringToFront = TRUE),
+                              label = lapply(labs, htmltools::HTML)) %>%
+      addLegend("topright", pal = factpal, values = estaciones$CORRIENTE,
+                title = Nleyenda,
+                opacity = 1)
+    
+    map <- map %>% addTiles(group = "OpenStreetMap") %>%
+      addProviderTiles(providers$Esri.NatGeoWorldMap, group = "Esri.NatGeoWorld") %>%
+      addProviderTiles(providers$Esri.WorldPhysical, group = "Esri.WorldPhysical") %>%
+      addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery") %>%
       
-      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
-      proxy2ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
-      proxy2ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon2ICA")
-    } else {
-      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
-      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
+      leaflet.extras::addDrawToolbar(
+        position = "topleft",
+        targetGroup = "Herramientas de dibujo",
+        polylineOptions = leaflet.extras::drawPolylineOptions(showLength = TRUE, metric = TRUE),
+        polygonOptions = leaflet.extras::drawPolygonOptions(showArea = TRUE, metric = TRUE),
+        circleOptions = leaflet.extras::drawCircleOptions(showRadius = TRUE, metric = TRUE),
+        rectangleOptions = leaflet.extras::drawRectangleOptions(showArea = TRUE, metric = TRUE),
+        markerOptions = leaflet.extras::drawMarkerOptions(),
+        circleMarkerOptions = FALSE,
+        editOptions = leaflet.extras::editToolbarOptions(selectedPathOptions = leaflet.extras::selectedPathOptions())
+      ) %>%
       
-      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
-      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
-      req(input$FechaICA)
-      Fechaf=input$FechaICA
+      addLayersControl(
+        position = "topright",
+        baseGroups = c("OpenStreetMap", "Esri.NatGeoWorld", "Esri.WorldPhysical", "Esri.WorldImagery"),
+        overlayGroups = c("Estaciones Perfiles", "Rios Perfiles", "Otras Estaciones", "Herramientas de dibujo", NshapesContexto),
+        options = layersControlOptions(collapsed = TRUE)
+      ) %>% 
+      addMiniMap(toggleDisplay = TRUE, position = "topright") %>%
       
-      ####
-      ICA_datosSub=ICA_datos1
-      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
-      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
-      
-      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
-      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) #, CUENCA=ICA_datosSub$CUENCA, ALTITUD=ICA_datosSub$ALTITUD
-      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
-      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
-      Cat=CategoriasICA
-      for (i in 1:nrow(ICA_datosSub)){
-        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
-          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
+      htmlwidgets::onRender("
+      function(el, x) {
+        var map = this;
+        
+        var searchControl = L.control({position: 'bottomleft'});
+        searchControl.onAdd = function (map) {
+          var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+          div.style.backgroundColor = 'white';
+          div.style.padding = '3px';
+          div.style.display = 'flex';
+          div.style.alignItems = 'center';
+
+          div.innerHTML = '<input type=\"text\" class=\"custom-search-input\" placeholder=\"Buscar lugar en Colombia...\" style=\"width: 170px; padding: 2px 5px; border: 1px solid #ccc; outline: none; font-size: 12px; height: 24px;\">' +
+                          '<button class=\"custom-search-btn\" title=\"Buscar\" style=\"background: #fff; border: 1px solid #ccc; border-left: none; cursor: pointer; padding: 2px 6px; height: 24px;\">🔍</button>';
+
+          L.DomEvent.disableClickPropagation(div);
+          return div;
+        };
+        searchControl.addTo(map);
+
+        var gpsControl = L.control({position: 'bottomright'});
+        var svgTarget = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#444\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"/><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"/><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"12\"/><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"#444\"/></svg>';
+        var svgSpinner = '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"2.5\" stroke-linecap=\"round\" style=\"animation: spin 1s linear infinite;\"><style>@keyframes spin { 100% { transform: rotate(360deg); } }</style><path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/></svg>';
+
+        gpsControl.onAdd = function (map) {
+          var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+          div.style.backgroundColor = 'white';
+          div.style.padding = '0px';
+          div.innerHTML = '<button class=\"gps-location-btn\" title=\"Obtener mi ubicación\" style=\"background: #fff; border: none; cursor: pointer; height: 30px; width: 30px; display: flex; align-items: center; justify-content: center; outline: none;\">' + svgTarget + '</button>';
+          
+          L.DomEvent.disableClickPropagation(div);
+          return div;
+        };
+        gpsControl.addTo(map);
+
+        var gpsMarker = null;
+        var gpsCircle = null;
+
+        var gpsBtn = el.querySelector('.gps-location-btn');
+        if (gpsBtn) {
+          L.DomEvent.on(gpsBtn, 'click', function() {
+            if (!navigator.geolocation) {
+              alert('Geolocalización no soportada en este navegador.');
+              return;
+            }
+
+            gpsBtn.innerHTML = svgSpinner;
+
+            navigator.geolocation.getCurrentPosition(
+              function(pos) {
+                gpsBtn.innerHTML = svgTarget;
+                var lat = pos.coords.latitude;
+                var lng = pos.coords.longitude;
+                var acc = pos.coords.accuracy;
+
+                if (gpsMarker) map.removeLayer(gpsMarker);
+                if (gpsCircle) map.removeLayer(gpsCircle);
+
+                map.flyTo([lat, lng], 15);
+
+                gpsCircle = L.circle([lat, lng], {
+                  radius: acc,
+                  color: '#1d4ed8',
+                  fillColor: '#3b82f6',
+                  fillOpacity: 0.15,
+                  weight: 1.5
+                }).addTo(map);
+
+                gpsMarker = L.marker([lat, lng])
+                  .addTo(map)
+                  .bindPopup('<b>Ubicación del usuario</b><br>Margen de precisión: ±' + Math.round(acc) + ' m')
+                  .openPopup();
+              },
+              function(err) {
+                gpsBtn.innerHTML = svgTarget;
+                var msjs = {
+                  1: 'Acceso denegado a la ubicación.',
+                  2: 'Ubicación no disponible.',
+                  3: 'Tiempo de espera agotado al consultar el GPS.'
+                };
+                alert(msjs[err.code] || 'Error al obtener la ubicación.');
+              },
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+          });
         }
-        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
-          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
+
+        var searchInput = el.querySelector('.custom-search-input');
+        var searchBtn = el.querySelector('.custom-search-btn');
+
+        function executeSearch() {
+          var query = searchInput.value;
+          if (!query) return;
+          fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=co&q=' + encodeURIComponent(query))
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (data && data.length > 0) {
+                map.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 14);
+              } else {
+                alert('Lugar no encontrado en Colombia.');
+              }
+            });
+        }
+
+        if (searchBtn && searchInput) {
+          L.DomEvent.on(searchBtn, 'click', executeSearch);
+          L.DomEvent.on(searchInput, 'keypress', function(e) {
+            if (e.keyCode === 13) executeSearch();
+          });
         }
       }
-      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
-      proxy1ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
-      proxy2ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
-    }
+    ")
+    
+    coor <- c(min(estaciones$LONGITUD), min(estaciones$LATITUD), max(estaciones$LONGITUD), max(estaciones$LATITUD))
+    fitBounds(map, coor[1] - 0.03, coor[2] - 0.03, coor[3] + 0.03, coor[4] + 0.03)
   })
   
-  proxy1ica = leafletProxy("mapICA1")
-  proxy2ica = leafletProxy("mapICA2")
   
-  observeEvent(input$EstacionICA,{
-    req(input$FechaICA)
+  observeEvent(input$RioPerfil, {
+    req(input$RioPerfil)
     
-    if(input$EstacionICA!="Todas"){
-      Estacionf=input$EstacionICA
-      selected_polygon = ICA_datos1[ICA_datos1$Estacion==Estacionf,]
-      x=unique(selected_polygon$LONGITUD)
-      y=unique(selected_polygon$LATITUD)
-      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
-      proxy1ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
-      proxy1ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon1ICA")
-      
-      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
-      proxy2ica %>% fitBounds(x-0.03, y-0.03, x+0.03, y+0.03)
-      proxy2ica %>% addCircles(radius=input$radioICA,opacity = 1, fill = FALSE, stroke=TRUE, weight = 5,color="black",lng =x, lat =y,group="highlighted_polygon2ICA")
-    } else {
-      proxy1ica %>% clearGroup("highlighted_polygon1ICA")
-      proxy2ica %>% clearGroup("highlighted_polygon2ICA")
-      
-      ICAs=c("ICA-5 [IDEAM]", "ICA-6 [CARDER]")
-      ICAsc=c("Categoria_ICA_IDEAM", "Categoria_ICA_CARDER")
-      req(input$FechaICA)
-      Fechaf=input$FechaICA
-      
-      ####
-      ICA_datosSub=ICA_datos1
-      ICA_datosSub=ICA_datos1[ICA_datos1$Fecha>=Fechaf[1],]
-      ICA_datosSub=ICA_datosSub[ICA_datosSub$Fecha<=Fechaf[2],]
-      
-      ICA_datosSub=ICA_datosSub[,c("Estacion",ICAs,"LATITUD","LONGITUD","CORRIENTE","CUENCA","ALTITUD")]
-      ICA_datosSub=aggregate(ICA_datosSub[,ICAs,drop =FALSE],list(Estacion=ICA_datosSub$Estacion, LATITUD=ICA_datosSub$LATITUD, LONGITUD=ICA_datosSub$LONGITUD, CORRIENTE=ICA_datosSub$CORRIENTE),mean,na.rm=TRUE) #, CUENCA=ICA_datosSub$CUENCA, ALTITUD=ICA_datosSub$ALTITUD
-      ICA_datosSub$Categoria_ICA_IDEAM="Sin informacion"
-      ICA_datosSub$Categoria_ICA_CARDER="Sin informacion"
-      Cat=CategoriasICA
-      for (i in 1:nrow(ICA_datosSub)){
-        if (!is.na(ICA_datosSub$`ICA-5 [IDEAM]`[i])) {
-          ICA_datosSub$Categoria_ICA_IDEAM[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-5 [IDEAM]`[i] & Cat$Vmax>ICA_datosSub$`ICA-5 [IDEAM]`[i],"Categoria"]
-        }
-        if (!is.na(ICA_datosSub$`ICA-6 [CARDER]`[i])) {
-          ICA_datosSub$Categoria_ICA_CARDER[i]=Cat[Cat$Variable=="ICA IDEAM" & Cat$Vmin<=ICA_datosSub$`ICA-6 [CARDER]`[i] & Cat$Vmax>ICA_datosSub$`ICA-6 [CARDER]`[i],"Categoria"]
+    proxy1perfil <- leafletProxy("mapa_perfil")
+    
+    Estacionf <- input$RioPerfil
+    estaciones <- unique(Perfiles_Datos[, c("NOMBRE", "AbcisaNombre", "CODIGO", "NOMBRE_ESTACION", "Abscisakm", "LONGITUD", "LATITUD", "NOMBRE_COMPLETO")])
+    estaciones <- estaciones[estaciones$NOMBRE == Estacionf, ]
+    coor <- c(min(estaciones$LONGITUD), min(estaciones$LATITUD), max(estaciones$LONGITUD), max(estaciones$LATITUD))
+    
+    shp <- st_zm(Perfilesshp, drop = TRUE, what = "ZM")
+    selected_polygon <- shp[shp$NOMBRE == Estacionf, ]
+    
+    proxy1perfil %>% fitBounds(coor[1] - 0.03, coor[2] - 0.03, coor[3] + 0.03, coor[4] + 0.03)
+    proxy1perfil %>% clearGroup("highlighted_polygonPerfiles")
+    proxy1perfil %>% addPolylines(data = selected_polygon, group = "highlighted_polygonPerfiles", weight = 10,
+                                  color = "black", options = pathOptions(pane = "principallineas"))
+  })
+  
+  
+  observe({
+    req(Perfiles_Parametros$Parametros)
+    
+    updateSelectInput(
+      session,
+      inputId = "parametro_perfil",
+      choices = Perfiles_Parametros$Parametros,
+      selected = Perfiles_Parametros$Parametros[1]
+    )
+  })
+  
+  
+  datos_perfil_filtrados <- reactive({
+    req(input$RioPerfil, input$parametro_perfil)
+    
+    df <- Perfiles_Datos[Perfiles_Datos$NOMBRE == input$RioPerfil, ]
+    req(nrow(df) > 0)
+    
+    req(input$parametro_perfil %in% colnames(df))
+    
+    df <- df[order(df$Abscisakm), ]
+    return(df)
+  })
+  
+  
+  # ==============================================================================
+  # RENDERIZADO DEL GRÁFICO DE PERFILES (CORREGIDO Y LIMPIO)
+  # ==============================================================================
+  output$grafico_perfil_render <- renderPlotly({
+    req(input$RioPerfil, input$parametro_perfil)
+    
+    Estacionf <- input$RioPerfil
+    col       <- input$parametro_perfil
+    ejey      <- input$log_scale_perfil
+    
+    # 1. Filtrar estaciones de monitoreo
+    estaciones <- Perfiles_Datos[Perfiles_Datos$NOMBRE == Estacionf, ]
+    estaciones <- estaciones[!is.na(estaciones[[col]]), ]
+    req(nrow(estaciones) > 0)
+    
+    # Configuración de franjas
+    idx_p   <- match(col, Perfiles_Parametros$Parametros)
+    franja  <- if (!is.na(idx_p)) Perfiles_Parametros$Valor_optimo[idx_p] else "Menor concentracion"
+    franjac <- if (identical(franja, "Mayor concentracion")) c("#ebf2ec", "#ffe0e2") else c("#ffe0e2", "#ebf2ec")
+    m       <- list(l = 100, r = 50, b = 100, t = 100, pad = 4)
+    
+    # 2. Resúmenes estadísticos
+    estacionesmed <- aggregate(estaciones[, col, drop = FALSE], list(AbcisaNombre = estaciones$AbcisaNombre, Abscisakm = estaciones$Abscisakm, NOMBRE_ESTACION = estaciones$NOMBRE_ESTACION), mean, na.rm = TRUE)
+    estacionesmax <- aggregate(estaciones[, col, drop = FALSE], list(AbcisaNombre = estaciones$AbcisaNombre, Abscisakm = estaciones$Abscisakm, NOMBRE_ESTACION = estaciones$NOMBRE_ESTACION), max, na.rm = TRUE)
+    estacionesmin <- aggregate(estaciones[, col, drop = FALSE], list(AbcisaNombre = estaciones$AbcisaNombre, Abscisakm = estaciones$Abscisakm, NOMBRE_ESTACION = estaciones$NOMBRE_ESTACION), min, na.rm = TRUE)
+    
+    estacionesmed <- estacionesmed[order(estacionesmed$Abscisakm), ]
+    estacionesmax <- estacionesmax[order(estacionesmax$Abscisakm), ]
+    estacionesmin <- estacionesmin[order(estacionesmin$Abscisakm), ]
+    
+    y_axis_config <- if (isTRUE(ejey)) list(title = col, type = "log") else list(title = col)
+    
+    # 3. Gráfico base de monitoreo y franjas
+    fig <- plot_ly() %>%
+      add_trace(data = estacionesmax, x = ~Abscisakm, y = estacionesmax[[col]], name = "Máximo Monitoreo", type = 'scatter', mode = 'lines', line = list(color = "#ed8087", width = 1.5, dash = 'dash')) %>%
+      add_trace(data = estacionesmed, x = ~Abscisakm, y = estacionesmed[[col]], type = 'scatter', mode = 'lines', opacity = 0.4, fill = 'tonexty', fillcolor = franjac[1], line = list(color = franjac[1]), name = 'Franja Med-Max', showlegend = FALSE) %>%
+      add_trace(data = estacionesmed, x = ~Abscisakm, y = estacionesmed[[col]], name = "Medio Monitoreo", type = 'scatter', mode = 'lines', line = list(color = "black", width = 1.5, dash = 'dots')) %>%
+      add_trace(data = estacionesmin, x = ~Abscisakm, y = estacionesmin[[col]], type = 'scatter', mode = 'lines', opacity = 0.4, fill = 'tonexty', fillcolor = franjac[2], line = list(color = franjac[2]), name = 'Franja Min-Med', showlegend = FALSE) %>%
+      add_trace(data = estacionesmin, x = ~Abscisakm, y = estacionesmin[[col]], name = "Mínimo Monitoreo", type = 'scatter', mode = 'lines', line = list(color = "#3b8a43", width = 1.5, dash = 'longdash')) %>%
+      add_trace(data = estaciones, x = ~Abscisakm, y = estaciones[[col]], name = "Datos Monitoreo", type = 'scatter', mode = 'markers', marker = list(size = 4, color = "#888888"),
+                text = ~paste0("<b>Estación: </b>", NOMBRE_ESTACION, "<br><b>Fecha: </b>", Fecha, "<br><b>Valor: </b>", round(estaciones[[col]], 2)), hoverinfo = 'text') %>%
+      layout(xaxis = list(tickvals = estacionesmin$Abscisakm, ticktext = estacionesmin$AbcisaNombre, title = "", tickangle = 90, tickfont = list(size = 10)),
+             yaxis = y_axis_config, autosize = TRUE, margin = m,
+             title = paste0("Corriente: ", Estacionf, "<br>Parámetro: ", col), font = list(size = 11))
+    
+    # 4. Metas Anteriores / Históricas (Líneas Azules sin texto amontonado)
+    EstacionesRio  <- Perfilesshp[Perfilesshp$NOMBRE == Estacionf, c("NOMBRE", "Abscisakm", "ESTWQ")] %>% st_drop_geometry()
+    PerfilesMetas1 <- PerfilesMetas[is.element(PerfilesMetas$ESTWQ, EstacionesRio$ESTWQ), c("ESTWQ", "Meta", "Abscisakm", "Tramo", "Nombre Tramo", col)]
+    PerfilesMetas1 <- as.data.frame(PerfilesMetas1)
+    
+    azules <- c("#1022e8", "#1080e8", "#10d6e8", "#10e8b9")
+    metas  <- unique(PerfilesMetas1$Meta)
+    
+    if (length(metas) > 0) {
+      for (t in seq_along(metas)) {
+        PerfilesMetasm <- PerfilesMetas1[PerfilesMetas1$Meta == metas[t], ]
+        PerfilesMetasm <- PerfilesMetasm[order(PerfilesMetasm$Tramo, PerfilesMetasm$Abscisakm), ]
+        
+        if (col %in% colnames(PerfilesMetasm)) {
+          fig <- fig %>%
+            add_trace(
+              data = PerfilesMetasm, x = ~Abscisakm, y = PerfilesMetasm[[col]], 
+              name = paste0("Meta Anterior: ", metas[t]), 
+              type = 'scatter', mode = 'lines', 
+              line = list(color = azules[min(t, length(azules))], width = 2.5, dash = 'solid'),
+              text = ~paste0("<b>Meta Anterior (", metas[t], "): </b>", PerfilesMetasm[[col]], "<br><b>Tramo: </b>", `Nombre Tramo`),
+              hoverinfo = 'text'
+            )
         }
       }
-      coor=c(min(ICA_datosSub$LONGITUD),min(ICA_datosSub$LATITUD),max(ICA_datosSub$LONGITUD),max(ICA_datosSub$LATITUD))
-      proxy1ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
-      proxy2ica %>% fitBounds(coor[1]-0.03, coor[2]-0.03, coor[3]+0.03, coor[4]+0.03)
     }
+    
+    # ==============================================================================
+    # 5. SUPERPONER NUEVAS METAS ACTUALIZADAS (SIN DEPENDER DE SHAPEFILES/ESTACIONES)
+    # ==============================================================================
+    # ==============================================================================
+    # 5. SUPERPONER NUEVAS METAS ACTUALIZADAS (PROTEGIDO Y VECTORIZADO)
+    # ==============================================================================
+    if (exists("tramos_meta_calidad_long") && !is.null(tramos_meta_calidad_long)) {
+      
+      # 1. Filtrar metas nuevas por Río y Parámetro
+      df_nuevas <- tramos_meta_calidad_long %>% 
+        filter(
+          tolower(trimws(Rio)) == tolower(trimws(Estacionf)),
+          tolower(trimws(Parametro)) == tolower(trimws(col))
+        )
+      
+      if (nrow(df_nuevas) > 0) {
+        
+        # 2. Asignar Abscisakm heredando los tramos de las metas anteriores
+        if (exists("PerfilesMetas1") && nrow(PerfilesMetas1) > 0) {
+          ref_abscisas <- unique(PerfilesMetas1[, c("Tramo", "Abscisakm")])
+          
+          # Asegurar que ambos campos sean vectores numéricos simples
+          df_nuevas$Tramo    <- as.numeric(as.character(df_nuevas$Tramo))
+          ref_abscisas$Tramo <- as.numeric(as.character(ref_abscisas$Tramo))
+          
+          # Si Abscisakm ya existía en df_nuevas, removerla para evitar sufijos .x/.y
+          if ("Abscisakm" %in% colnames(df_nuevas)) {
+            df_nuevas$Abscisakm <- NULL
+          }
+          
+          df_nuevas <- merge(df_nuevas, ref_abscisas, by = "Tramo", all.x = TRUE)
+        }
+        
+        # 3. Extraer Abscisakm como vector atómico simple para evitar errores en order()
+        v_abscisa <- as.numeric(as.character(unlist(df_nuevas$Abscisakm)))
+        v_meta    <- as.numeric(as.character(unlist(df_nuevas$meta_valor)))
+        
+        # Filtrar NAs
+        valid_idx <- !is.na(v_abscisa) & !is.na(v_meta)
+        df_nuevas <- df_nuevas[valid_idx, ]
+        v_abscisa <- v_abscisa[valid_idx]
+        
+        if (nrow(df_nuevas) > 0) {
+          # Ordenar asegurando un vector plano
+          df_nuevas <- df_nuevas[order(v_abscisa), ]
+          
+          uso_txt <- if ("Uso" %in% colnames(df_nuevas)) df_nuevas$Uso else "No especificado"
+          
+          # 4. Graficar la trazante verde fosforescente de la nueva meta
+          fig <- fig %>%
+            add_trace(
+              data = df_nuevas, 
+              x = ~as.numeric(Abscisakm), 
+              y = ~as.numeric(meta_valor), 
+              name = "Meta Actualizada (Nueva)",
+              type = 'scatter', 
+              mode = 'lines+markers',
+              line = list(color = '#00e676', width = 3, dash = 'dash'),
+              marker = list(size = 8, color = '#00e676', symbol = 'diamond'),
+              text = ~paste0("<b>Meta Actualizada: </b>", meta_valor, "<br><b>Tramo: </b>", Tramo, "<br><b>Uso: </b>", uso_txt),
+              hoverinfo = 'text'
+            )
+        }
+      }
+    }
+    
+    return(fig)
   })
+  
+  
+  
+  
+  output$Perfil0 <- renderPlotly({
+    req(input$RioPerfil)
+    
+    Estacionf <- input$RioPerfil
+    col <- "ICA-5 [IDEAM]"
+    
+    estaciones <- Perfiles_Datos[Perfiles_Datos$NOMBRE == Estacionf, ]
+    estaciones_sub <- unique(estaciones[, c("CODIGO", "NOMBRE_ESTACION", "NOMBRE", "Abscisakm", "AbcisaNombre", "NOMBRE_COMPLETO")])
+    
+    ICA_datosSub <- ICA_datos1[, c("Estacion", "Codigo", "Fecha", "ICA-5 [IDEAM]")]
+    estaciones_sub <- merge(estaciones_sub, ICA_datosSub, by.x = "CODIGO", by.y = "Codigo", all.x = TRUE)
+    estaciones_sub <- estaciones_sub[!is.na(estaciones_sub[[col]]), ]
+    
+    req(nrow(estaciones_sub) > 0)
+    
+    d <- estaciones_sub
+    d$Categoria <- "Sin informacion"
+    Cat <- CategoriasICA
+    for (i in 1:nrow(d)) {
+      if (!is.na(d$`ICA-5 [IDEAM]`[i])) {
+        d$Categoria[i] <- Cat[Cat$Variable == "ICA IDEAM" & Cat$Vmin <= d$`ICA-5 [IDEAM]`[i] & Cat$Vmax > d$`ICA-5 [IDEAM]`[i], "Categoria"]
+      }
+    }
+    d <- d[order(d[, "Estacion"], d[, "Fecha"]), ]
+    CategoriasSub <- CategoriasICA[CategoriasICA$Variable == "ICA IDEAM", ]
+    d <- merge(d, CategoriasSub[, c("Categoria", "CodigoColor", "ordenOriginal")], by = "Categoria")
+    
+    estacionesmed <- aggregate(estaciones_sub[, col, drop = FALSE], list(AbcisaNombre = estaciones_sub$AbcisaNombre, Abscisakm = estaciones_sub$Abscisakm, NOMBRE_ESTACION = estaciones_sub$NOMBRE_ESTACION), mean, na.rm = TRUE)
+    estacionesmax <- aggregate(estaciones_sub[, col, drop = FALSE], list(AbcisaNombre = estaciones_sub$AbcisaNombre, Abscisakm = estaciones_sub$Abscisakm, NOMBRE_ESTACION = estaciones_sub$NOMBRE_ESTACION), max, na.rm = TRUE)
+    estacionesmin <- aggregate(estaciones_sub[, col, drop = FALSE], list(AbcisaNombre = estaciones_sub$AbcisaNombre, Abscisakm = estaciones_sub$Abscisakm, NOMBRE_ESTACION = estaciones_sub$NOMBRE_ESTACION), min, na.rm = TRUE)
+    
+    estacionesmed <- estacionesmed[order(estacionesmed$Abscisakm), ]
+    estacionesmax <- estacionesmax[order(estacionesmax$Abscisakm), ]
+    estacionesmin <- estacionesmin[order(estacionesmin$Abscisakm), ]
+    
+    estacionesmed[, col] <- round(estacionesmed[, col], 3)
+    estacionesmax[, col] <- round(estacionesmax[, col], 3)
+    estacionesmin[, col] <- round(estacionesmin[, col], 3)
+    
+    CategoriasSub$CodigoColor1 <- colorspace::lighten(CategoriasSub$CodigoColor, amount = 0.7, method = "relative")
+    icas <- sort(unique(CategoriasSub$ordenOriginal), decreasing = TRUE)
+    
+    fig <- plot_ly() %>%
+      add_trace(x = c(min(estacionesmax$Abscisakm), max(estacionesmax$Abscisakm)), y = c(1, 1), type = 'scatter',
+                mode = 'lines', line = list(color = CategoriasSub[CategoriasSub$ordenOriginal == max(CategoriasSub$ordenOriginal), "CodigoColor1"], width = 0.5),
+                showlegend = FALSE)
+    
+    for (i in icas) {
+      fig <- fig %>%
+        add_trace(x = c(min(estacionesmax$Abscisakm), max(estacionesmax$Abscisakm)), 
+                  y = c(CategoriasSub[CategoriasSub$ordenOriginal == i, "Vmin"], CategoriasSub[CategoriasSub$ordenOriginal == i, "Vmin"]),
+                  type = 'scatter', mode = 'lines', alpha = 0.3, opacity = 0.3, fill = 'tonexty', 
+                  fillcolor = CategoriasSub[CategoriasSub$ordenOriginal == i, "CodigoColor1"], 
+                  line = list(color = CategoriasSub[CategoriasSub$ordenOriginal == i, "CodigoColor1"]),
+                  name = paste0("Categoria ICA: ", CategoriasSub[CategoriasSub$ordenOriginal == i, "Categoria"]))
+    }
+    
+    fig <- fig %>%
+      add_trace(data = estacionesmax, x = ~Abscisakm, y = estacionesmax[[col]], name = "Maximo", type = 'scatter', mode = 'lines', line = list(color = "#314d7a", width = 1.5, dash = 'dash')) %>%
+      add_trace(data = estacionesmed, x = ~Abscisakm, y = estacionesmed[[col]], name = "Medio", type = 'scatter', mode = 'lines', line = list(color = "black", width = 2, dash = 'dots')) %>%
+      add_trace(data = estacionesmin, x = ~Abscisakm, y = estacionesmin[[col]], name = "Minimo", type = 'scatter', mode = 'lines', line = list(color = "#70120f", width = 1.5, dash = 'longdash'))
+    
+    icas_d <- sort(unique(d$ordenOriginal))
+    for (i in icas_d) {
+      est_cat <- d[d$ordenOriginal == i, ]
+      fig <- fig %>%
+        add_trace(data = est_cat, x = ~Abscisakm, y = est_cat[[col]], name = as.character(unique(est_cat$Categoria)), type = 'scatter', mode = 'markers', 
+                  marker = list(size = 4, color = unique(est_cat$CodigoColor)),
+                  text = ~paste("Nombre: ", NOMBRE_COMPLETO, '<br>',
+                                "Estacion: ", NOMBRE_ESTACION, '<br>',
+                                "Categoria: ", Categoria, '<br>',
+                                "Fecha: ", Fecha, '<br>',
+                                "Abscisa: ", Abscisakm, '<br>',
+                                "Corriente: ", NOMBRE))
+    }
+    
+    fig %>%
+      layout(xaxis = list(tickvals = estacionesmin$Abscisakm, ticktext = estacionesmin$AbcisaNombre, title = "", tickangle = 90, tickfont = list(size = 10)),
+             yaxis = list(title = col),
+             autosize = TRUE, 
+             margin = list(l = 100, r = 50, b = 100, t = 100, pad = 4),
+             title = paste0("Corriente: ", Estacionf, "<br> Perfil ICA-5 [IDEAM]"),
+             font = list(size = 11))
+  })
+ 
   
